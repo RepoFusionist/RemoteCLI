@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Common.Protocol/Common.Protocol.csproj" />
+    <Project Path="src/Common.Security/Common.Security.csproj" />
+    <Project Path="src/RemoteCli.Local/RemoteCli.Local.csproj" />
+    <Project Path="src/RemoteCli.Remote/RemoteCli.Remote.csproj" />
+    <Project Path="src/RemoteCli.Desktop/RemoteCli.Desktop.csproj" />
+    <Project Path="src/RemoteCli.Vps/RemoteCli.Vps.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RemoteCli.UnitTests/RemoteCli.UnitTests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/ClashSshProxy/ClashSshProxy.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LongShell · 空对话</title>
+<style>
+  :root{
+    --bg:#1A1A19;
+    --bg-raise:#242423;
+    --bg-pill:#2C2C2A;
+    --bg-chip:#262625;
+    --bg-input:#212120;
+    --border:#2C2C2A;
+    --border-soft:#242423;
+    --text:#ECEAE7;
+    --muted:#8F8C86;
+    --muted-2:#6E6B66;
+    --accent:#E0764E;
+    --accent-deep:#C15F3C;
+    --danger:#C42B1C;
+    --sans:"Noto Sans SC","Microsoft YaHei UI","Segoe UI",sans-serif;
+    --serif:"Noto Serif SC","Source Han Serif SC",Georgia,serif;
+    --r:8px;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font-family:var(--sans);font-size:12.5px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0;}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+  svg{display:block;flex:none;}
+
+  .app{height:100%;display:grid;grid-template-rows:36px minmax(0,1fr);}
+
+  /* ── 标题栏 ─────────────────────────────── */
+  .titlebar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 6px 0 10px;user-select:none;
+  }
+  .titlebar__nav{display:flex;align-items:center;gap:2px;}
+  .iconbtn{
+    width:30px;height:26px;display:grid;place-items:center;border-radius:6px;
+    color:var(--muted);
+  }
+  .iconbtn:hover{background:var(--bg-pill);color:var(--text);}
+  .titlebar__win{display:flex;gap:2px;}
+  .winbtn{width:38px;height:26px;display:grid;place-items:center;color:var(--muted);border-radius:6px;cursor:default;}
+  .winbtn:hover{background:var(--bg-pill);}
+  .winbtn--close:hover{background:var(--danger);color:#fff;}
+
+  .body{display:grid;grid-template-columns:206px minmax(0,1fr);min-height:0;}
+  .app.side-collapsed .body{grid-template-columns:0 minmax(0,1fr);}
+  .app.side-collapsed .side{overflow:hidden;border-right-width:0;}
+
+  /* ── 侧栏 ───────────────────────────────── */
+  .side{
+    border-right:1px solid var(--border-soft);
+    padding:10px 10px 12px;display:flex;flex-direction:column;gap:2px;
+    min-width:0;overflow-y:auto;overflow-x:hidden;
+  }
+  .pills{display:flex;gap:4px;margin-bottom:8px;}
+  .pill{
+    flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+    height:28px;border-radius:var(--r);color:var(--muted);font-size:12px;
+  }
+  .pill:hover{background:var(--bg-raise);color:var(--text);}
+  .pill[aria-selected="true"]{background:var(--bg-pill);color:var(--text);}
+
+  .newchat{
+    display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;
+    border-radius:var(--r);background:var(--bg-pill);color:var(--text);
+    font-size:12.5px;margin-bottom:6px;
+  }
+  .newchat svg{color:var(--accent);}
+  .newchat:hover{background:#333331;}
+
+  .link{
+    display:flex;align-items:center;gap:9px;height:28px;padding:0 10px;
+    border-radius:var(--r);color:var(--muted);font-size:12.5px;width:100%;text-align:left;
+  }
+  .link:hover{background:var(--bg-raise);color:var(--text);}
+
+  .group{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 10px 4px;color:var(--muted-2);font-size:11.5px;
+  }
+  .group__tools{display:flex;gap:2px;}
+  .group__tools .iconbtn{width:24px;height:22px;}
+
+  .item{
+    display:flex;align-items:center;gap:8px;width:100%;
+    height:27px;padding:0 10px;border-radius:var(--r);
+    color:#C9C6C0;font-size:12.5px;text-align:left;white-space:nowrap;
+  }
+  .item i{width:3px;height:3px;border-radius:50%;background:var(--accent);opacity:.6;flex:none;}
+  .item span{overflow:hidden;text-overflow:ellipsis;}
+  .item:hover{background:var(--bg-raise);color:var(--text);}
+  .item[aria-current="true"]{background:var(--bg-pill);color:var(--text);}
+
+  .account{
+    margin-top:auto;display:flex;align-items:center;gap:8px;
+    padding:8px 10px;border-radius:var(--r);width:100%;text-align:left;
+  }
+  .account:hover{background:var(--bg-raise);}
+  .account svg{color:var(--accent);}
+  .account b{font-weight:500;font-size:12.5px;}
+  .account small{color:var(--muted-2);font-size:11px;margin-left:2px;}
+  .account .chev{margin-left:auto;color:var(--muted-2);}
+
+  /* ── 主区 ───────────────────────────────── */
+  .main{min-width:0;display:flex;flex-direction:column;}
+  .col{
+    width:min(600px,88%);margin:0 auto;flex:1;min-height:0;
+    display:flex;flex-direction:column;padding:0 20px;
+  }
+  .greet{
+    display:flex;align-items:center;gap:10px;
+    margin:64px 0 0;font-family:var(--serif);font-weight:500;
+    font-size:20px;letter-spacing:.01em;
+  }
+  .greet .mark{color:var(--accent);}
+
+  .composer{margin-top:auto;padding:16px 0 14px;}
+  .chips{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+  .chip{
+    display:flex;align-items:center;gap:6px;height:24px;padding:0 10px;
+    border-radius:999px;background:var(--bg-chip);color:var(--muted);font-size:11.5px;
+  }
+  .chip:hover{color:var(--text);}
+  .chip[aria-pressed="true"]{background:var(--bg-pill);color:var(--text);}
+  .mascot{margin-left:auto;color:var(--accent);}
+
+  .inputbox{
+    display:flex;align-items:center;gap:10px;
+    background:var(--bg-input);border:1px solid var(--border);
+    border-radius:12px;padding:9px 8px 9px 14px;
+  }
+  .inputbox:focus-within{border-color:#3A3A38;}
+  .inputbox input{
+    flex:1;background:none;border:0;color:var(--text);
+    font:inherit;font-size:13px;min-width:0;
+  }
+  .inputbox input::placeholder{color:var(--muted-2);}
+  .inputbox input:focus{outline:none;}
+  .send{
+    width:26px;height:26px;border-radius:7px;display:grid;place-items:center;
+    background:var(--bg-pill);color:var(--muted-2);flex:none;
+  }
+  .send.is-ready{background:var(--accent);color:#241811;}
+  .send.is-ready:hover{background:#EA855D;}
+
+  .under{display:flex;align-items:center;gap:4px;margin-top:8px;}
+  .under .iconbtn{width:26px;height:24px;}
+  .chip--ghost{background:transparent;height:22px;padding:0 8px;}
+  .chip--ghost:hover{background:var(--bg-chip);}
+  .under__right{margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--muted);}
+  .model{display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:6px;color:var(--muted);font-size:11.5px;}
+  .model:hover{background:var(--bg-chip);color:var(--text);}
+  .ring{width:13px;height:13px;border-radius:50%;border:1.4px solid var(--muted-2);margin-left:2px;}
+  .ring:hover{border-color:var(--muted);}
+
+  .toast{
+    position:fixed;left:50%;bottom:120px;transform:translateX(-50%);
+    background:var(--bg-pill);border:1px solid var(--border);color:var(--text);
+    padding:7px 14px;border-radius:8px;font-size:12px;z-index:50;
+    animation:pop .16s ease-out both;
+  }
+  @keyframes pop{from{opacity:0;transform:translate(-50%,4px);}to{opacity:1;transform:translate(-50%,0);}}
+
+  @media (max-width:760px){
+    .body{grid-template-columns:minmax(0,1fr);}
+    .side{display:none;}
+    .col{width:94%;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important;}
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <div class="titlebar">
+    <div class="titlebar__nav">
+      <button class="iconbtn" id="menuBtn" aria-label="菜单">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
+      </button>
+      <button class="iconbtn" id="sideBtn" aria-label="收起或展开侧栏">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6.2 2.5v11"/></svg>
+      </button>
+      <button class="iconbtn" aria-label="后退">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8H3.5M7 3.8L2.8 8L7 12.2"/></svg>
+      </button>
+      <button class="iconbtn" aria-label="前进">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9.5M9 3.8L13.2 8L9 12.2"/></svg>
+      </button>
+    </div>
+    <div class="titlebar__win">
+      <button class="winbtn" aria-label="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1"/></svg></button>
+      <button class="winbtn" aria-label="最大化"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.4" y="1.4" width="7.2" height="7.2" rx="1" fill="none" stroke="currentColor"/></svg></button>
+      <button class="winbtn winbtn--close" aria-label="关闭"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.6 1.6l6.8 6.8M8.4 1.6L1.6 8.4" stroke="currentColor" stroke-width="1"/></svg></button>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <aside class="side">
+      <div class="pills">
+        <button class="pill" aria-selected="false">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2.5 7.2L8 2.6l5.5 4.6V13a.8.8 0 0 1-.8.8H9.8V9.6H6.2v4.2H3.3a.8.8 0 0 1-.8-.8V7.2z"/></svg>
+          首页
+        </button>
+        <button class="pill" aria-selected="true">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M4.5 5.5a1.8 1.8 0 1 1 1.8-1.8v8.6A1.8 1.8 0 1 0 4.5 10.5h7a1.8 1.8 0 1 0-1.8 1.8V3.7a1.8 1.8 0 1 0 1.8 1.8h-7"/></svg>
+          Code
+        </button>
+      </div>
+
+      <button class="newchat">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        新建
+      </button>
+
+      <button class="link">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="5.4" r="2.6"/><path d="M3 13.4c.7-2.4 2.7-3.6 5-3.6s4.3 1.2 5 3.6"/></svg>
+        自定义
+      </button>
+      <button class="link">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2"/><path d="M5.4 8h5.2M8 5.4v5.2" opacity="0"/><circle cx="5.6" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="10.4" cy="8" r=".9" fill="currentColor" stroke="none"/></svg>
+        更多
+      </button>
+
+      <div class="group">
+        <span>Chat</span>
+        <span class="group__tools">
+          <button class="iconbtn" aria-label="新建会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+          <button class="iconbtn" aria-label="搜索会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M13.4 13.4L10.2 10.2"/></svg></button>
+          <button class="iconbtn" aria-label="筛选会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3 5h10M5 8h6M7 11h2"/></svg></button>
+        </span>
+      </div>
+      <button class="item" data-chat><i></i><span>工具调用与命令测试</span></button>
+      <button class="item" data-chat><i></i><span>参考作业完成</span></button>
+
+      <div class="group">
+        <span>longShell</span>
+        <span class="group__tools">
+          <button class="iconbtn" aria-label="新建 longShell 会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+        </span>
+      </div>
+      <button class="item" data-chat><i></i><span>服务器 SSH 登录与服务状态</span></button>
+
+      <div class="group">
+        <span>MC</span>
+        <span class="group__tools">
+          <button class="iconbtn" aria-label="新建 MC 会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+        </span>
+      </div>
+      <button class="item" data-chat><i></i><span>本地 MCP 连接文件写入测试</span></button>
+      <button class="item" data-chat><i></i><span>本地 MCP 文件写入测试</span></button>
+      <button class="item" data-chat><i></i><span>网络爬取测试</span></button>
+
+      <button class="account">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
+        <b>暮光星灵</b><small>网关</small>
+        <span class="chev"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg></span>
+      </button>
+    </aside>
+
+    <main class="main">
+      <div class="col">
+        <h1 class="greet">
+          <span class="mark">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v19M2.5 12h19M5.3 5.3l13.4 13.4M18.7 5.3L5.3 18.7"/></svg>
+          </span>
+          接下来做什么，暮光星灵？
+        </h1>
+
+        <div class="composer">
+          <div class="chips">
+            <button class="chip" aria-pressed="true" data-chip>
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="8" rx="1.2"/><path d="M5.5 13.4h5" stroke-linecap="round"/></svg>
+              本地
+            </button>
+            <button class="chip" aria-pressed="true" data-chip>
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l5.4 3v6.4l-5.4 3-5.4-3V4.8l5.4-3z"/><path d="M2.9 5l5.1 2.9L13.1 5M8 8v6.8"/></svg>
+              longShell
+            </button>
+            <span class="mascot">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3L6.3 17.7"/></svg>
+            </span>
+          </div>
+
+          <div class="inputbox">
+            <input id="msgInput" type="text" placeholder="描述任务或提出问题" autocomplete="off" spellcheck="false">
+            <button class="send" id="sendBtn" aria-label="发送" disabled>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5V3.5M4.2 7.3L8 3.5l3.8 3.8"/></svg>
+            </button>
+          </div>
+
+          <div class="under">
+            <button class="iconbtn" aria-label="添加附件">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+            </button>
+            <button class="chip chip--ghost" aria-pressed="true" data-chip>自动</button>
+            <span class="under__right">
+              <button class="model">Opus 5.5</button>
+              <button class="model">Medium</button>
+              <button class="ring" aria-label="更多设置"></button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(sel){ return document.querySelector(sel); };
+  var $$ = function(sel){ return Array.prototype.slice.call(document.querySelectorAll(sel)); };
+
+  /* 侧栏收起 / 展开 */
+  $("#sideBtn").addEventListener("click", function(){
+    $("#app").classList.toggle("side-collapsed");
+  });
+
+  /* 上下文芯片可点选 */
+  $$("[data-chip]").forEach(function(chip){
+    chip.addEventListener("click", function(){
+      chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+    });
+  });
+
+  /* 会话条目选中反馈 */
+  $$("[data-chat]").forEach(function(item){
+    item.addEventListener("click", function(){
+      $$("[data-chat]").forEach(function(other){ other.removeAttribute("aria-current"); });
+      item.setAttribute("aria-current", "true");
+    });
+  });
+
+  /* 输入与发送（预览：未接宿主） */
+  var input = $("#msgInput"), send = $("#sendBtn");
+  input.addEventListener("input", function(){
+    var ready = input.value.trim().length > 0;
+    send.disabled = !ready;
+    send.classList.toggle("is-ready", ready);
+  });
+  function trySend(){
+    if(!input.value.trim()) return;
+    var text = input.value.trim();
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    toast("预览文件：『" + text + "』尚未接入宿主");
+  }
+  function toast(message){
+    var el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = message;
+    document.body.appendChild(el);
+    setTimeout(function(){ el.remove(); }, 2000);
+  }
+  send.addEventListener("click", trySend);
+  input.addEventListener("keydown", function(e){
+    if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); trySend(); }
+  });
+})();
+</script>
+</body>
+</html>

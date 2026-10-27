@@ -1,0 +1,34 @@
+[Unit]
+Description=LongShell encrypted relay (Alibaba NewServer)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=longshell
+Group=longshell
+WorkingDirectory=/opt/longshell/current
+Environment=DOTNET_ROOT=/opt/longshell/runtime
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:18084
+Environment=Relay__BehindTrustedReverseProxy=true
+ExecStart=/opt/longshell/runtime/dotnet /opt/longshell/current/RemoteCli.Vps.dll
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+MemoryAccounting=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

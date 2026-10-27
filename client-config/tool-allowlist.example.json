@@ -1,0 +1,26 @@
+{
+  "description": "Illustrative allowlist. Adapt this shape to the AI client; use the LongShell connection and remote command tools, and enable conversation_sync only when storage is opted in.",
+  "enabledTools": [
+    "longshell_connection_auth",
+    "longshell_connection_connect",
+    "longshell_connection_reconnect",
+    "longshell_connection_status",
+    "longshell_connection_close",
+    "longshell_remote_command_start",
+    "longshell_remote_command_receive",
+    "longshell_remote_command_cancel",
+    "longshell_remote_tools_list",
+    "longshell_remote_tool_call",
+    "longshell_remote_tool_receive",
+    "longshell_remote_tool_cancel",
+    "conversation_status",
+    "conversation_sync"
+  ],
+  "disabledToolCategories": [
+    "local-shell",
+    "local-filesystem",
+    "local-process-management",
+    "local-code-execution",
+    "other-mcp-servers"
+  ]
+}

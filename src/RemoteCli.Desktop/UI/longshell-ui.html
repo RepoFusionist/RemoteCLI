@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LongShell</title>
+<script>
+/* 在绘制前确定主题，避免闪烁。localStorage 在部分宿主里不可用，需兜底。 */
+(function(){
+  var theme = "dark";
+  try{
+    var saved = localStorage.getItem("longshell-theme");
+    if(saved === "light" || saved === "dark") theme = saved;
+    else if(window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) theme = "light";
+  }catch(e){}
+  document.documentElement.dataset.theme = theme;
+})();
+</script>
+<style>
+  :root{
+    --sans:"Noto Sans SC","Microsoft YaHei UI","Segoe UI",sans-serif;
+    --mono:"Cascadia Mono",Consolas,monospace;
+    --r:8px;
+  }
+  :root[data-theme="light"]{
+    color-scheme:light;
+    --bg:#FAF9F5; --side:#F3F2EC; --card:#FFFFFF; --field:#FFFFFF;
+    --border:#E6E4DA; --border-soft:#EDEBE1;
+    --text:#1F1E1D; --muted:#74726B;
+    --accent:#B4542F; --accent-soft:#F4E8DF; --on-accent:#FFFFFF;
+    --ok:#4C6B46; --ok-soft:#EDF1E8;
+    --btn-bg:#1F1E1D; --btn-fg:#FAF9F5; --btn-hover:#3A3833;
+    --nav-hover:#ECEAE0; --nav-active:#E7E5DA;
+    --scrim:rgba(31,30,29,.34);
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#191918; --side:#1E1E1D; --card:#232322; --field:#1F1F1E;
+    --border:#333331; --border-soft:#2B2B29;
+    --text:#ECEAE7; --muted:#98958F;
+    --accent:#D97757; --accent-soft:#332620; --on-accent:#241811;
+    --ok:#93B28B; --ok-soft:#242A22;
+    --btn-bg:#ECEAE7; --btn-fg:#1B1B1A; --btn-hover:#FFFFFF;
+    --nav-hover:#262624; --nav-active:#2C2C2A;
+    --scrim:rgba(0,0,0,.5);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font-family:var(--sans);font-size:13px;line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input{font:inherit;color:inherit;}
+  button{cursor:pointer;}
+
+  .app{height:100%;display:grid;grid-template-rows:48px minmax(0,1fr);}
+
+  /* 顶栏 */
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:0 16px 0 20px;border-bottom:1px solid var(--border);
+  }
+  .brand{display:flex;align-items:baseline;gap:10px;font-size:13.5px;font-weight:600;letter-spacing:.01em;}
+  .brand span{font-weight:400;font-size:11.5px;color:var(--muted);letter-spacing:0;}
+  .topbar__right{display:flex;align-items:center;gap:14px;}
+  .svc{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);white-space:nowrap;}
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--ok);flex:none;}
+  .dot--idle{background:var(--muted);opacity:.6;}
+  .dot--accent{background:var(--accent);}
+
+  .themebtn{
+    display:flex;align-items:center;gap:6px;
+    background:transparent;border:1px solid var(--border);border-radius:var(--r);
+    padding:4px 10px;font-size:11.5px;color:var(--muted);
+  }
+  .themebtn:hover{color:var(--text);border-color:var(--muted);}
+  .themebtn svg{display:block;}
+
+  /* 主体 */
+  .body{display:grid;grid-template-columns:212px minmax(0,1fr);min-height:0;}
+
+  .side{
+    background:var(--side);border-right:1px solid var(--border);
+    padding:14px 10px 16px;display:flex;flex-direction:column;gap:2px;overflow:auto;
+  }
+  .nav{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    width:100%;padding:8px 12px;border:0;border-radius:var(--r);
+    background:transparent;color:var(--muted);text-align:left;font-size:13px;
+  }
+  .nav:hover{background:var(--nav-hover);color:var(--text);}
+  .nav[aria-selected="true"]{background:var(--nav-active);color:var(--text);}
+  .nav .dot{visibility:hidden;}
+  .nav.is-live .dot{visibility:visible;}
+
+  .side__section{margin-top:20px;padding:0 12px;}
+  .side__label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px;}
+  .side__relay{
+    width:100%;padding:6px 8px;font-family:var(--mono);font-size:10.5px;
+    background:var(--field);border:1px solid var(--border);border-radius:6px;color:var(--muted);
+  }
+  .side__relay:focus{outline:none;border-color:var(--accent);color:var(--text);}
+  .side__foot{margin-top:auto;padding:16px 12px 0;font-size:11px;color:var(--muted);line-height:2;}
+  .side__foot .svc{font-size:11px;}
+
+  /* 内容列 */
+  .main{overflow:auto;}
+  .col{max-width:600px;margin:0 auto;padding:44px 32px 56px;}
+  .view[hidden]{display:none;}
+
+  h1{font-size:20px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em;}
+  .sub{margin:0 0 30px;color:var(--muted);font-size:12.5px;}
+
+  .field{margin-bottom:20px;}
+  .field > label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;}
+  .input{
+    width:100%;padding:9px 11px;background:var(--field);
+    border:1px solid var(--border);border-radius:var(--r);font-size:13px;
+  }
+  .input::placeholder{color:var(--muted);opacity:.7;}
+  .input:focus{outline:none;border-color:var(--accent);}
+  .input--mono{font-family:var(--mono);font-size:12px;letter-spacing:.01em;}
+
+  .group{margin-bottom:22px;}
+  .group__label{font-size:12px;color:var(--muted);margin-bottom:8px;}
+
+  .perm{
+    position:relative;display:grid;grid-template-columns:16px 1fr;gap:10px;
+    padding:7px 8px;margin-left:-8px;border-radius:var(--r);cursor:pointer;
+  }
+  .perm:hover{background:var(--nav-hover);}
+  .perm input{position:absolute;left:8px;top:11px;opacity:0;width:1px;height:1px;}
+  .box{
+    width:15px;height:15px;margin-top:4px;border-radius:4px;
+    border:1px solid var(--muted);background:transparent;position:relative;
+  }
+  .perm input:checked + .box{background:var(--accent);border-color:var(--accent);}
+  .perm input:checked + .box::after{
+    content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;
+    border:solid var(--on-accent);border-width:0 1.6px 1.6px 0;transform:rotate(42deg);
+  }
+  .perm input:focus-visible + .box{outline:2px solid var(--accent);outline-offset:2px;}
+  .perm__name{font-size:13px;line-height:1.6;}
+  .perm__desc{font-size:11.5px;color:var(--muted);line-height:1.6;}
+  .perm.is-off{opacity:.45;cursor:not-allowed;}
+  .perm.is-off:hover{background:transparent;}
+
+  .stepper{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:var(--r);background:var(--field);overflow:hidden;}
+  .stepper button{width:30px;height:32px;border:0;background:transparent;color:var(--muted);font-size:15px;line-height:1;}
+  .stepper button:hover{color:var(--text);background:var(--nav-hover);}
+  .stepper input{
+    width:44px;height:32px;text-align:center;border:0;background:transparent;
+    border-left:1px solid var(--border);border-right:1px solid var(--border);
+    font-family:var(--mono);font-size:12px;
+  }
+  .stepper input:focus{outline:none;}
+  .hint-inline{font-size:11.5px;color:var(--muted);margin-left:10px;}
+
+  .actions{display:flex;align-items:center;gap:10px;margin-top:26px;}
+  .btn{
+    border:1px solid var(--border);background:transparent;color:var(--text);
+    border-radius:var(--r);padding:8px 16px;font-size:12.5px;
+  }
+  .btn:hover{background:var(--nav-hover);}
+  .btn--primary{background:var(--btn-bg);border-color:var(--btn-bg);color:var(--btn-fg);font-weight:500;}
+  .btn--primary:hover{background:var(--btn-hover);border-color:var(--btn-hover);}
+  .btn--quiet{border-color:transparent;color:var(--muted);}
+  .btn--quiet:hover{color:var(--accent);background:transparent;}
+  .btn[disabled]{opacity:.4;cursor:not-allowed;}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .status{
+    display:flex;gap:8px;align-items:flex-start;margin-top:20px;
+    font-size:12px;color:var(--muted);min-height:22px;
+  }
+  .status .dot{margin-top:8px;}
+  .status.is-ok{color:var(--ok);}
+  .status.is-warn{color:var(--accent);}
+
+  /* 连接授权卡片 */
+  .card{
+    margin-top:26px;background:var(--card);border:1px solid var(--border);
+    border-radius:12px;padding:18px 20px;
+  }
+  .card[hidden]{display:none;}
+  .card__head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}
+  .card__title{font-size:12px;color:var(--muted);}
+  .card__clock{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .card__clock b{font-weight:500;color:var(--text);}
+  .kv{padding:10px 0;}
+  .kv + .kv{border-top:1px solid var(--border-soft);}
+  .kv__label{font-size:11px;color:var(--muted);margin-bottom:4px;}
+  .kv__value{font-family:var(--mono);font-size:12px;line-height:1.8;word-break:break-all;}
+  .kv__tools{display:flex;gap:14px;margin-top:6px;}
+  .link{
+    background:none;border:0;padding:0;font-size:11.5px;color:var(--muted);
+    border-bottom:1px solid transparent;
+  }
+  .link:hover{color:var(--accent);border-bottom-color:var(--accent);}
+  .link:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .link[disabled]{opacity:.4;cursor:not-allowed;}
+  .link[disabled]:hover{color:var(--muted);border-bottom-color:transparent;}
+  .card__note{margin:12px 0 0;font-size:11.5px;color:var(--muted);line-height:1.8;}
+  .card__granted{margin-top:12px;padding-top:12px;border-top:1px solid var(--border-soft);font-size:12px;color:var(--ok);}
+
+  /* 弹窗 */
+  .scrim{
+    position:fixed;inset:0;background:var(--scrim);z-index:40;
+    display:grid;place-items:center;padding:24px;
+  }
+  .scrim[hidden]{display:none;}
+  .dialog{
+    width:min(480px,100%);background:var(--card);color:var(--text);
+    border:1px solid var(--border);border-radius:14px;padding:24px;
+    animation:pop .16s ease-out both;
+  }
+  @keyframes pop{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+  .dialog h2{font-size:16px;font-weight:600;margin:0 0 6px;}
+  .dialog__lede{font-size:12px;color:var(--muted);margin:0 0 18px;}
+  .facts{
+    display:grid;grid-template-columns:64px 1fr;gap:4px 12px;
+    padding:12px 0;margin-bottom:16px;
+    border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);
+  }
+  .facts dt{font-size:11.5px;color:var(--muted);margin:0;}
+  .facts dd{margin:0;font-family:var(--mono);font-size:11.5px;word-break:break-all;}
+  .dialog__warn{font-size:11.5px;color:var(--accent);margin:16px 0 20px;line-height:1.8;}
+  .dialog__actions{display:flex;align-items:center;gap:10px;}
+  .dialog__hint{margin-left:auto;font-size:11px;color:var(--muted);}
+
+  .toast{
+    position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:60;
+    background:var(--btn-bg);color:var(--btn-fg);
+    padding:7px 14px;border-radius:8px;font-size:12px;
+    animation:pop .16s ease-out both;
+  }
+
+  /* 布局适配：宽窗留白、窄窗收栏、矮窗压节奏 */
+  @media (max-width:1040px){
+    .body{grid-template-columns:186px minmax(0,1fr);}
+    .col{padding:36px 26px 48px;}
+  }
+  @media (max-width:880px){
+    .brand span{display:none;}
+    .body{grid-template-columns:172px minmax(0,1fr);}
+    .side{padding:12px 8px 14px;}
+    .side__section{padding:0 10px;}
+    .col{padding:30px 22px 42px;}
+    h1{font-size:19px;}
+    .sub{margin-bottom:24px;}
+  }
+  @media (max-width:720px){
+    .body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);}
+    .side{
+      flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px;
+      border-right:0;border-bottom:1px solid var(--border);padding:8px 10px 10px;
+    }
+    .nav{width:auto;padding:6px 14px;}
+    .side__section{
+      flex:1 1 100%;display:flex;align-items:center;gap:8px;
+      margin-top:4px;padding:0 6px;
+    }
+    .side__label{margin:0;white-space:nowrap;}
+    .side__foot{display:none;}
+    .col{max-width:100%;padding:26px 18px 40px;}
+  }
+  @media (max-width:560px){
+    .svc{display:none;}
+    .themebtn span{display:none;}
+    .themebtn{padding:5px 7px;}
+    .topbar{padding:0 10px;}
+  }
+  /* WebView2 宿主窗口偏矮时（exe 最小 760×560）压缩纵向节奏，避免首屏被截 */
+  @media (max-height:680px){
+    .col{padding-top:26px;padding-bottom:32px;}
+    .sub{margin-bottom:20px;}
+    .field{margin-bottom:14px;}
+    .group{margin-bottom:16px;}
+    .perm{padding:5px 8px;}
+    .actions{margin-top:16px;}
+    .status{margin-top:14px;}
+    .card{margin-top:18px;padding:16px 18px;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">LongShell <span>远程授权</span></div>
+    <div class="topbar__right">
+      <span class="svc" aria-live="polite"><i class="dot dot--idle" id="serviceDot"></i><span id="serviceText">本地服务启动中</span></span>
+      <span class="svc" aria-live="polite"><i class="dot dot--idle" id="mcpDot"></i><span id="mcpText">MCP 未连接</span></span>
+      <span class="svc" aria-live="polite"><i class="dot dot--idle" id="remoteDot"></i><span id="remoteText">未进行连接</span></span>
+      <button class="themebtn" id="themeBtn" aria-label="切换明暗主题">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <circle cx="8" cy="8" r="3.2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M13 3l-1.4 1.4M4.4 11.6L3 13"/>
+        </svg>
+        <span id="themeLabel">亮色</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <nav class="side">
+      <button class="nav" data-role="remote" aria-selected="true">
+        <span>被控端</span><i class="dot" data-live="remote"></i>
+      </button>
+      <button class="nav" data-role="local" aria-selected="false">
+        <span>主控端</span><i class="dot" data-live="local"></i>
+      </button>
+
+      <div class="side__section">
+        <label class="side__label" for="relay">中继地址</label>
+        <input class="side__relay" id="relay" type="text" spellcheck="false"
+               value="https://api.sunxiaochuan258.de5.net/remotecli/">
+      </div>
+
+      <div class="side__foot">
+        <div>本机 <span id="machineName">—</span></div>
+        <div>用户 <span id="userName">—</span></div>
+        <div style="margin-top:6px">版本 <span id="appVersion">开发版</span></div>
+      </div>
+    </nav>
+
+    <main class="main">
+
+      <!-- 被控端 -->
+      <div class="view" data-view="remote">
+        <div class="col">
+          <h1>被控端</h1>
+          <p class="sub">在这台电脑上设置访问权限，对方验证密码后即可连接。权限和工作区随时可改。</p>
+
+          <div class="field">
+            <label for="remoteIdentity">对方看到的名称</label>
+            <input class="input" id="remoteIdentity" type="text" placeholder="请输入名称" autocomplete="off">
+          </div>
+
+          <div class="field">
+            <label for="authorizationUserName">连接用户名</label>
+            <input class="input input--mono" id="authorizationUserName" type="text"
+                   placeholder="例如 my-device" autocomplete="off" spellcheck="false">
+          </div>
+
+          <div class="field">
+            <label for="credentialMode">连接授权</label>
+            <select class="input" id="credentialMode">
+              <option value="random">用户名 + 随机密码</option>
+              <option value="fixed">用户名 + 固定密码</option>
+            </select>
+          </div>
+
+          <div class="field" id="fixedPasswordField" hidden>
+            <label for="fixedPassword">固定密码</label>
+            <input class="input input--mono" id="fixedPassword" type="password"
+                   placeholder="至少 12 个字符" autocomplete="new-password">
+          </div>
+
+          <div class="field" id="rotationField">
+            <label for="rotationMinutes">随机密码刷新时间</label>
+            <select class="input" id="rotationMinutes">
+              <option value="0" selected>每次连接后</option>
+              <option value="5">5 分钟</option>
+              <option value="10">10 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="60">1 小时</option>
+              <option value="360">6 小时</option>
+              <option value="720">12 小时</option>
+              <option value="1440">1 天</option>
+              <option value="4320">3 天</option>
+              <option value="10080">7 天</option>
+              <option value="43200">30 天</option>
+            </select>
+          </div>
+
+          <div class="group">
+            <div class="group__label">访问权限</div>
+
+            <label class="perm">
+              <input type="checkbox" name="perm" value="session" checked>
+              <span class="box" aria-hidden="true"></span>
+              <span>
+                <span class="perm__name">查看会话</span>
+                <div class="perm__desc">允许读取会话信息和可用工具列表</div>
+              </span>
+            </label>
+
+            <label class="perm">
+              <input type="checkbox" name="perm" value="execute" checked>
+              <span class="box" aria-hidden="true"></span>
+              <span>
+                <span class="perm__name">执行与取消命令</span>
+                <div class="perm__desc">允许运行、取消命令和调用远程工具</div>
+              </span>
+            </label>
+
+            <label class="perm">
+              <input type="checkbox" id="workspaceRestricted" checked>
+              <span class="box" aria-hidden="true"></span>
+              <span>
+                <span class="perm__name">工作区限制</span>
+                <div class="perm__desc">文件和命令均隔离在工作区内；关闭后允许按本机用户权限访问其他路径</div>
+              </span>
+            </label>
+
+            <label class="perm">
+              <input type="checkbox" id="autoApproveTools">
+              <span class="box" aria-hidden="true"></span>
+              <span>
+                <span class="perm__name">自动批准 AI 工具调用</span>
+                <div class="perm__desc">开启后，文件读写和已安装工具不再逐项询问；仍受当前连接权限和工作区限制</div>
+              </span>
+            </label>
+          </div>
+
+          <div class="group">
+            <div class="group__label">AI 工具</div>
+            <div class="kv">
+              <div class="kv__label">远程工作区</div>
+              <div class="kv__value" id="toolWorkspace" style="font-family:var(--sans)">未选择</div>
+              <div class="kv__tools"><button class="link" type="button" id="selectWorkspaceBtn">选择</button></div>
+            </div>
+            <div class="kv">
+              <div class="kv__label">已安装工具</div>
+              <div class="kv__value" id="installedTools" style="font-family:var(--sans)">无</div>
+              <div class="kv__tools"><button class="link" type="button" id="installToolBtn">安装</button></div>
+            </div>
+            <p class="card__note">设置立即生效。更改权限、工作区或审批方式会取消运行中的操作。自动批准仅持续到关闭连接授权或退出客户端。限制开启时，命令在隔离副本中运行，成功后同步文件；请使用相对路径。单次副本最多 512 MiB、20000 个文件。</p>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="createBtn">开启连接授权</button>
+            <button class="btn btn--quiet" id="stopRemoteBtn" disabled>关闭连接授权</button>
+          </div>
+
+          <div class="status" id="remoteStatus" aria-live="polite">
+            <i class="dot dot--idle"></i><span>连接授权尚未开启。</span>
+          </div>
+
+          <div class="card" id="inviteCard" hidden>
+            <div class="card__head">
+              <span class="card__title" id="inviteTitle">连接授权</span>
+              <span class="card__clock"><span id="inviteClockLabel">密码有效至</span> <b id="inviteClock">—</b></span>
+            </div>
+
+            <div class="kv">
+              <div class="kv__label">用户名</div>
+              <div class="kv__value" id="inviteId">—</div>
+              <div class="kv__tools">
+                <button class="link" type="button" data-copy="id">复制</button>
+              </div>
+            </div>
+
+            <div class="kv">
+              <div class="kv__label">连接密码</div>
+              <div class="kv__value" id="inviteSecret">—</div>
+              <div class="kv__tools">
+                <button class="link" type="button" id="revealBtn">显示</button>
+                <button class="link" type="button" data-copy="secret">复制</button>
+              </div>
+            </div>
+
+            <p class="card__note">把用户名和密码交给主控端用户。密码不会发送给 Relay，也不要粘贴到 AI 对话或日志。</p>
+            <div class="card__granted" id="inviteGranted" hidden></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 主控端 -->
+      <div class="view" data-view="local" hidden>
+        <div class="col">
+          <h1>主控端</h1>
+          <p class="sub">使用被控端用户名和密码连接。访问权限由被控端设置并实时更新。</p>
+
+          <div class="field">
+            <label for="localIdentity">你的名称</label>
+            <input class="input" id="localIdentity" type="text" placeholder="请输入名称" autocomplete="off">
+          </div>
+
+          <div class="field">
+            <label for="joinUserName">连接用户名</label>
+            <input class="input input--mono" id="joinUserName" type="text" spellcheck="false"
+                   placeholder="请输入被控端用户名">
+          </div>
+
+          <div class="field">
+            <label for="joinSecret">远程密码</label>
+            <input class="input input--mono" id="joinSecret" type="password" spellcheck="false"
+                   placeholder="请输入固定密码或当前随机密码">
+            <div class="perm__desc">连接中断后可重新认证；随机密码已刷新时，请使用被控端当前显示的密码。</div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="pairBtn">连接</button>
+            <button class="btn btn--quiet" id="stopLocalBtn" disabled>停止会话</button>
+          </div>
+
+          <div class="status" id="localStatus" aria-live="polite">
+            <i class="dot dot--idle"></i><span>还没有加入会话。</span>
+          </div>
+
+          <div class="card" id="sessionCard" hidden>
+            <div class="card__head">
+              <span class="card__title">当前会话</span>
+              <span class="card__clock"><b id="sessionExpires">—</b></span>
+            </div>
+            <div class="kv">
+              <div class="kv__label">被控端</div>
+              <div class="kv__value" id="sessionPeer">—</div>
+            </div>
+            <div class="kv">
+              <div class="kv__label">当前权限</div>
+              <div class="kv__value" id="sessionPerms" style="font-family:var(--sans)">—</div>
+            </div>
+            <div class="kv"><div class="kv__label">远程工作区</div><div class="kv__value" id="sessionWorkspace">—</div></div>
+            <div class="kv"><div class="kv__label">工作区限制</div><div class="kv__value" id="sessionRestriction">—</div></div>
+            <p class="card__note">关闭窗口或停止会话即断开，MCP 随即失去访问权限。</p>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var $  = function(sel, root){ return (root || document).querySelector(sel); };
+  var $$ = function(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
+
+  var host = (window.chrome && window.chrome.webview) ? window.chrome.webview : null;
+  var PERM_NAMES = { session:"查看会话", execute:"执行命令", cancel:"取消命令" };
+
+  var state = {
+    host: !!host,
+    ready: !host,
+    serviceConnected: !host,
+    mcpConnected: false,
+    remotePhase:"idle",   // idle | creating | waiting | connected | ended
+    localPhase:"idle",    // idle | connecting | awaiting | connected | ended
+    invite:null,          // { id, secret, identity, expiresAt, credentialMode, permissions }
+    session:null,         // { peer, expiresAt }
+    granted:[],
+    revealed:false,
+    timer:null
+  };
+
+  function post(message){ if(host){ host.postMessage(message); } }
+
+  /* ── 主题 ─────────────────────────────── */
+  function applyThemeLabel(){
+    var dark = document.documentElement.dataset.theme === "dark";
+    $("#themeLabel").textContent = dark ? "亮色" : "暗色";
+    $("#themeBtn").setAttribute("aria-label", dark ? "切换到亮色模式" : "切换到暗色模式");
+  }
+  $("#themeBtn").addEventListener("click", function(){
+    var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try{ localStorage.setItem("longshell-theme", next); }catch(e){}
+    applyThemeLabel();
+  });
+  applyThemeLabel();
+
+  /* ── 小工具 ───────────────────────────── */
+  function toast(message){
+    if(!message) return;
+    var el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = message;
+    document.body.appendChild(el);
+    setTimeout(function(){ el.remove(); }, 2000);
+  }
+
+  function copyToClipboard(text, okMessage){
+    if(state.host){ post({ type:"copy", text:text }); return; }
+    function fallback(){
+      var area = document.createElement("textarea");
+      area.value = text;
+      area.style.cssText = "position:fixed;opacity:0";
+      document.body.appendChild(area);
+      area.select();
+      try{ document.execCommand("copy"); toast(okMessage); }
+      catch(e){ toast("剪贴板不可用，请手动选中复制"); }
+      area.remove();
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ toast(okMessage); }, fallback);
+    }else{
+      fallback();
+    }
+  }
+
+  function pad(n){ return String(n).padStart(2, "0"); }
+  function fmtClock(ms){
+    var total = Math.max(0, Math.floor(ms / 1000));
+    return pad(Math.floor(total / 60)) + ":" + pad(total % 60);
+  }
+  function fmtDate(d){
+    return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + " " +
+           pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function guid(){
+    if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c){
+      var r = Math.random()*16|0, v = c === "x" ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+  function makeSecret(){
+    var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    var bytes = new Uint8Array(43);
+    crypto.getRandomValues(bytes);
+    return Array.prototype.map.call(bytes, function(b){ return alphabet[b % 64]; }).join("");
+  }
+  function statusKind(kind){
+    return kind === "ok" ? "is-ok" : kind === "warn" ? "is-warn" : "";
+  }
+  function setStatus(el, message, kind){
+    el.classList.remove("is-ok", "is-warn");
+    var cls = statusKind(kind);
+    if(cls) el.classList.add(cls);
+    el.lastElementChild.textContent = message;
+    el.querySelector(".dot").className = "dot" + (cls === "is-ok" ? "" : cls === "is-warn" ? " dot--accent" : " dot--idle");
+  }
+  function grantedText(){
+    var names = [];
+    if(state.granted.indexOf("session") !== -1) names.push("查看会话");
+    if(state.granted.indexOf("execute") !== -1) names.push("执行与取消命令");
+    return names.join("、") || "已关闭远程操作";
+  }
+
+  function currentPermissions(){
+    var permissions = $$('input[name="perm"]:checked').map(function(input){ return input.value; });
+    if(permissions.indexOf("execute") !== -1) permissions.push("cancel");
+    return permissions;
+  }
+
+  function publishAccess(){
+    if(state.host && state.ready) post({ type:"update-access", permissions:currentPermissions(), workspaceRestricted:$("#workspaceRestricted").checked, autoApproveTools:$("#autoApproveTools").checked });
+  }
+  $$('input[name="perm"], #workspaceRestricted, #autoApproveTools').forEach(function(input){ input.addEventListener("change", publishAccess); });
+
+  /* ── 渲染 ─────────────────────────────── */
+  function render(){
+    var rp = state.remotePhase;
+    var lp = state.localPhase;
+    var remoteActive = rp === "creating" || rp === "waiting" || rp === "connected";
+    var localActive = lp === "connecting" || lp === "awaiting" || lp === "connected";
+
+    $("#createBtn").disabled = !state.ready || remoteActive;
+    $("#stopRemoteBtn").disabled = !remoteActive;
+    $("#pairBtn").disabled = !state.ready || localActive;
+    $("#pairBtn").textContent = lp === "ended" ? "重新连接" : "连接";
+    $("#stopLocalBtn").disabled = !localActive;
+
+    var remoteConnected = rp === "connected" || lp === "connected";
+    $('.nav[data-role="remote"]').classList.toggle("is-live", remoteConnected);
+    $('.nav[data-role="local"]').classList.toggle("is-live", remoteConnected);
+    $("#serviceDot").className = "dot" + (state.serviceConnected ? "" : " dot--idle");
+    $("#serviceText").textContent = state.serviceConnected ? "本地服务就绪" : "本地服务未就绪";
+    $("#mcpDot").className = "dot" + (state.mcpConnected ? "" : " dot--idle");
+    $("#mcpText").textContent = state.mcpConnected ? "MCP 已连接" : "MCP 未连接";
+    $("#remoteDot").className = "dot" + (remoteConnected ? "" : " dot--idle");
+    $("#remoteText").textContent = remoteConnected ? "已进行连接" : "未进行连接";
+
+    var card = $("#inviteCard");
+    var showCard = !!state.invite && (rp === "waiting" || rp === "connected");
+    card.hidden = !showCard;
+    if(showCard){
+      $("#inviteId").textContent = state.invite.id;
+      $("#inviteTitle").textContent = rp === "connected" ? "连接授权 · 已连接" : "连接授权";
+      $("#revealBtn").textContent = state.revealed ? "隐藏" : "显示";
+      $("#revealBtn").disabled = !state.invite.secret;
+      $('[data-copy="secret"]').disabled = !state.invite.secret;
+      $("#inviteSecret").textContent = state.invite.secret
+        ? (state.revealed ? state.invite.secret : "••••••••••••••••••••••••")
+        : "固定密码已设置";
+      var granted = $("#inviteGranted");
+      granted.hidden = rp !== "connected";
+      if(rp === "connected"){ granted.textContent = "已连接，当前权限：" + grantedText(); }
+      if(rp === "connected"){
+        $("#inviteClockLabel").textContent = "当前会话";
+        $("#inviteClock").textContent = "持续连接";
+      }else{
+        $("#inviteClockLabel").textContent = state.invite.refreshAfterConnection ? "刷新策略" : "密码有效至";
+        $("#inviteClock").textContent = state.invite.refreshAfterConnection
+          ? "每次连接后"
+          : fmtDate(new Date(state.invite.expiresAt));
+      }
+    }
+
+    var session = $("#sessionCard");
+    var showSession = !!state.session && lp === "connected";
+    session.hidden = !showSession;
+    if(showSession){
+      $("#sessionPeer").textContent = state.session.peer;
+      $("#sessionPerms").textContent = grantedText();
+      $("#sessionExpires").textContent = !state.session.expiresAt || state.session.expiresAt > Date.UTC(2100,0,1)
+        ? "持续连接" : fmtDate(new Date(state.session.expiresAt));
+    }
+  }
+
+  /* ── 授权到期显示 ─────────────────────── */
+  function stopClock(){ if(state.timer){ clearInterval(state.timer); state.timer = null; } }
+  function startClock(){ stopClock(); state.timer = setInterval(tick, 1000); tick(); }
+  function tick(){
+    if(!state.invite || state.remotePhase === "idle" || state.remotePhase === "ended") return;
+    if(state.remotePhase === "connected"){
+      $("#inviteClockLabel").textContent = "当前会话";
+      $("#inviteClock").textContent = "持续连接";
+      return;
+    }
+    if(state.invite.refreshAfterConnection){
+      $("#inviteClockLabel").textContent = "刷新策略";
+      $("#inviteClock").textContent = "每次连接后";
+      return;
+    }
+    var left = state.invite.expiresAt - Date.now();
+    $("#inviteClock").textContent = fmtDate(new Date(state.invite.expiresAt));
+    if(left <= 0 && !state.host){
+      state.invite.secret = makeSecret();
+      state.invite.expiresAt = Date.now() + 10*60*1000;
+      setStatus($("#remoteStatus"), "随机密码已刷新，等待主控端连接。", "ok");
+      render();
+    }
+  }
+
+  /* ── 角色切换 ─────────────────────────── */
+  function setRole(role){
+    $$(".nav").forEach(function(btn){
+      btn.setAttribute("aria-selected", String(btn.dataset.role === role));
+    });
+    $$("[data-view]").forEach(function(v){ v.hidden = v.dataset.view !== role; });
+
+    // 独立预览只预填输入，不创建真实连接。
+    if(!state.host && role === "local" && state.invite && state.invite.secret){
+      if(!$("#joinUserName").value) $("#joinUserName").value = state.invite.id;
+      if(!$("#joinSecret").value) $("#joinSecret").value = state.invite.secret;
+    }
+  }
+  $$(".nav").forEach(function(btn){
+    btn.addEventListener("click", function(){ setRole(btn.dataset.role); });
+  });
+
+  /* ── 被控端 ───────────────────────────── */
+  $("#createBtn").addEventListener("click", function(){
+    var identity = $("#remoteIdentity").value.trim();
+    var userName = $("#authorizationUserName").value.trim();
+    var credentialMode = $("#credentialMode").value;
+    var fixedPassword = $("#fixedPassword").value;
+    var rotationMinutes = parseInt($("#rotationMinutes").value, 10);
+    if(isNaN(rotationMinutes)) rotationMinutes = 10;
+    var relay    = $("#relay").value.trim();
+    var perms    = currentPermissions();
+
+    if(!/^https:\/\/\S+$/.test(relay) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(relay)){
+      setStatus($("#remoteStatus"), "中继地址需要 HTTPS，只有本机回环地址可以用 HTTP。", "warn");
+      $("#relay").focus();
+      return;
+    }
+    if(!identity){
+      setStatus($("#remoteStatus"), "请填写对方看到的名称。", "warn");
+      $("#remoteIdentity").focus();
+      return;
+    }
+    if(userName.length < 3){
+      setStatus($("#remoteStatus"), "连接用户名至少需要 3 个字符。", "warn");
+      $("#authorizationUserName").focus();
+      return;
+    }
+    if(credentialMode === "fixed" && fixedPassword.length < 12){
+      setStatus($("#remoteStatus"), "固定密码至少需要 12 个字符。", "warn");
+      $("#fixedPassword").focus();
+      return;
+    }
+    if(!perms.length){
+      setStatus($("#remoteStatus"), "开启连接前，请至少开启查看会话或执行命令。", "warn");
+      return;
+    }
+
+    if(state.host){
+      state.remotePhase = "creating";
+      setStatus($("#remoteStatus"), "正在开启连接授权…", "normal");
+      render();
+      post({
+        type:"create",
+        identity:identity,
+        userName:userName,
+        credentialMode:credentialMode,
+        fixedPassword:fixedPassword,
+        rotationMinutes:rotationMinutes,
+        relay:relay,
+        permissions:perms,
+        workspaceRestricted:$("#workspaceRestricted").checked,
+        autoApproveTools:$("#autoApproveTools").checked
+      });
+      return;
+    }
+
+    state.invite = {
+      id:userName,
+      secret:credentialMode === "random" ? makeSecret() : "",
+      expiresAt:rotationMinutes === 0 ? Date.now() + 30*24*60*60*1000 : Date.now() + rotationMinutes*60*1000,
+      credentialMode:credentialMode,
+      refreshAfterConnection:credentialMode === "random" && rotationMinutes === 0,
+      permissions:perms,
+      identity:identity
+    };
+    state.remotePhase = "waiting";
+    state.localPhase = "idle";
+    state.granted = [];
+    state.revealed = false;
+    $("#joinUserName").value = "";
+    $("#joinSecret").value = "";
+    setStatus($("#remoteStatus"), "连接授权已开启，等待主控端连接。", "ok");
+    render();
+    startClock();
+  });
+
+  $("#stopRemoteBtn").addEventListener("click", function(){
+    if(state.host){
+      setStatus($("#remoteStatus"), "正在关闭连接授权…", "normal");
+      post({ type:"stop", role:"remote" });
+      return;
+    }
+    stopClock();
+    state.remotePhase = "idle";
+    state.localPhase = "idle";
+    state.invite = null;
+    state.session = null;
+    state.granted = [];
+    state.revealed = false;
+    setStatus($("#remoteStatus"), "连接授权已关闭。", "normal");
+    setStatus($("#localStatus"), "会话已停止。", "normal");
+    render();
+  });
+  $("#selectWorkspaceBtn").addEventListener("click", function(){ post({ type:"select-workspace" }); });
+  $("#installToolBtn").addEventListener("click", function(){ post({ type:"install-tool" }); });
+
+  $("#inviteCard").addEventListener("click", function(e){
+    var btn = e.target.closest("[data-copy]");
+    if(!btn || !state.invite) return;
+    var isId = btn.dataset.copy === "id";
+    var value = isId ? state.invite.id : state.invite.secret;
+    if(!value) return;
+    copyToClipboard(value, isId ? "已复制连接用户名" : "已复制连接密码");
+  });
+  $("#revealBtn").addEventListener("click", function(){
+    state.revealed = !state.revealed;
+    render();
+  });
+
+  $("#credentialMode").addEventListener("change", function(){
+    var fixed = this.value === "fixed";
+    $("#fixedPasswordField").hidden = !fixed;
+    $("#rotationField").hidden = fixed;
+  });
+
+  /* ── 主控端 ───────────────────────────── */
+  $("#pairBtn").addEventListener("click", function(){
+    var name   = $("#localIdentity").value.trim();
+    var relay  = $("#relay").value.trim();
+    var userName = $("#joinUserName").value.trim();
+    var secret = $("#joinSecret").value;
+
+    if(!name){
+      setStatus($("#localStatus"), "请填写你的名称。", "warn");
+      $("#localIdentity").focus();
+      return;
+    }
+    if(userName.length < 3){
+      setStatus($("#localStatus"), "请输入至少 3 个字符的连接用户名。", "warn");
+      $("#joinUserName").focus();
+      return;
+    }
+    if(secret.length < 12){
+      setStatus($("#localStatus"), "连接密码至少需要 12 个字符。", "warn");
+      $("#joinSecret").focus();
+      return;
+    }
+
+    if(state.host){
+      state.localPhase = "connecting";
+      setStatus($("#localStatus"), "正在连接…", "normal");
+      render();
+      post({ type:"join", identity:name, relay:relay, userName:userName, secret:secret });
+      return;
+    }
+
+    setStatus($("#localStatus"), "当前是界面预览，请在桌面客户端发起连接。", "normal");
+  });
+
+  $("#stopLocalBtn").addEventListener("click", function(){
+    if(state.host){
+      setStatus($("#localStatus"), "正在停止会话…", "normal");
+      post({ type:"stop", role:"local" });
+      return;
+    }
+    state.localPhase = "idle";
+    state.remotePhase = "idle";
+    state.invite = null;
+    state.session = null;
+    state.granted = [];
+    stopClock();
+    $("#joinSecret").value = "";
+    setStatus($("#localStatus"), "会话已停止，MCP 已失去访问权限。", "normal");
+    setStatus($("#remoteStatus"), "会话已停止。", "normal");
+    render();
+  });
+
+  /* ── 宿主消息 ─────────────────────────── */
+  function onHostMessage(event){
+    var msg;
+    try{ msg = typeof event.data === "string" ? JSON.parse(event.data) : event.data; }
+    catch(e){ return; }
+    if(!msg || !msg.type) return;
+
+    switch(msg.type){
+      case "service-presence":
+        state.serviceConnected = !!msg.connected;
+        render();
+        break;
+
+      case "mcp-presence":
+        state.mcpConnected = !!msg.connected;
+        render();
+        break;
+
+      case "tool-settings":
+        $("#toolWorkspace").textContent = msg.workspace || "未选择";
+        $("#installedTools").textContent = (msg.installedTools || []).join("、") || "无";
+        if(typeof msg.workspaceRestricted === "boolean") $("#workspaceRestricted").checked = msg.workspaceRestricted;
+        if(typeof msg.autoApproveTools === "boolean") $("#autoApproveTools").checked = msg.autoApproveTools;
+        if(Array.isArray(msg.permissions)) $$('input[name="perm"]').forEach(function(input){ input.checked = msg.permissions.indexOf(input.value) !== -1; });
+        if(state.remotePhase === "connected" && Array.isArray(msg.permissions)) { state.granted = msg.permissions; render(); }
+        break;
+
+      case "remote-policy":
+        state.granted = msg.granted || [];
+        $("#sessionWorkspace").textContent = msg.workspace || "未选择";
+        $("#sessionRestriction").textContent = msg.workspaceRestricted ? "已开启" : "已关闭";
+        render();
+        break;
+
+      case "init":
+        state.ready = true;
+        if(msg.version) $("#appVersion").textContent = msg.version;
+        if(msg.userName){
+          $("#remoteIdentity").value = msg.userName;
+          $("#localIdentity").value = msg.userName;
+          $("#userName").textContent = msg.userName;
+        }
+        if(msg.machineName){
+          $("#machineName").textContent = msg.machineName;
+          if(!$("#authorizationUserName").value){
+            $("#authorizationUserName").value = String(msg.machineName).toLowerCase();
+          }
+        }
+        if(msg.relay){ $("#relay").value = msg.relay; }
+        render();
+        break;
+
+      case "phase":
+        if(msg.side === "remote"){
+          state.remotePhase = msg.phase;
+          if(msg.phase === "ended" || msg.phase === "idle"){
+            stopClock();
+            state.invite = null;
+            state.granted = [];
+            state.revealed = false;
+          }
+        }else{
+          state.localPhase = msg.phase;
+          if(msg.phase === "idle" || msg.phase === "ended"){ state.session = null; }
+        }
+        render();
+        break;
+
+      case "authorization-ready":
+        state.invite = {
+          id:msg.userName,
+          secret:msg.password || "",
+          identity:msg.userName,
+          expiresAt:Date.parse(msg.expiresAt),
+          credentialMode:msg.credentialMode,
+          refreshAfterConnection:!!msg.refreshAfterConnection,
+          permissions:msg.permissions || []
+        };
+        state.remotePhase = "waiting";
+        state.granted = [];
+        state.revealed = false;
+        render();
+        startClock();
+        break;
+
+      case "connection-ended":
+        if(msg.side === "remote" && state.invite){
+          state.remotePhase = "waiting";
+          state.granted = [];
+        }
+        render();
+        break;
+
+      case "connected":
+        state.granted = msg.granted || [];
+        if(msg.side === "remote"){
+          state.remotePhase = "connected";
+        }else{
+          state.localPhase = "connected";
+          state.session = {
+            peer:msg.peer || "",
+            expiresAt:msg.expiresAt ? Date.parse(msg.expiresAt) : Date.UTC(9999,11,31)
+          };
+        }
+        render();
+        break;
+
+      case "ended":
+        if(msg.side === "remote"){
+          state.remotePhase = "ended";
+          state.invite = null;
+          state.granted = [];
+          state.revealed = false;
+          stopClock();
+        }else{
+          state.localPhase = "ended";
+          state.session = null;
+        }
+        render();
+        break;
+
+      case "status":
+        setStatus(msg.side === "local" ? $("#localStatus") : $("#remoteStatus"), msg.text || "", msg.kind);
+        break;
+
+      case "auth-requested":
+        setRole("local");
+        if(msg.userName) $("#joinUserName").value = msg.userName;
+        setStatus($("#localStatus"), "MCP 请求连接或重新连接。请输入被控端当前密码；随机密码刷新后请使用新密码。", "normal");
+        $("#joinUserName").focus();
+        break;
+
+      case "toast":
+        toast(msg.text || "");
+        break;
+
+      case "error":
+        setStatus(msg.side === "local" ? $("#localStatus") : $("#remoteStatus"), msg.text || "操作失败。", "warn");
+        break;
+    }
+  }
+
+  if(host){
+    host.addEventListener("message", onHostMessage);
+    post({ type:"ready" });
+  }else{
+    // 独立预览：没有宿主时用演示身份，便于查看完整界面
+    $("#remoteIdentity").value = "慕光星灵";
+    $("#localIdentity").value = "慕光星灵";
+    $("#machineName").textContent = "MUGUANG-PC";
+    $("#userName").textContent = "慕光星灵";
+  }
+
+  setRole("remote");
+  render();
+})();
+</script>
+</body>
+</html>

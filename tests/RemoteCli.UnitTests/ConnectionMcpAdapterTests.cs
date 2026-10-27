@@ -1,0 +1,135 @@
+using Common.Protocol;
+using RemoteCli.Local;
+
+namespace RemoteCli.UnitTests;
+
+public sealed class ConnectionMcpAdapterTests
+{
+    [Fact]
+    public void OfflineToolListContainsOnlyConnectionControls()
+    {
+        var tools = ConnectionMcpAdapter.BuildToolsForStatus(
+            LocalConnectionStatus.Unavailable("The local service is stopped."));
+        var names = tools.Select(tool => tool.Name).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(
+            [
+                "longshell_connection_auth",
+                "longshell_connection_close",
+                "longshell_connection_connect",
+                "longshell_connection_discover",
+                "longshell_connection_reconnect",
+                "longshell_connection_status",
+                "longshell_connection_wait"
+            ],
+            names);
+    }
+
+    [Fact]
+    public void ConnectedToolListFollowsApprovedPermissions()
+    {
+        var machine = new LocalConnectionStateMachine();
+        var start = machine.BeginAuthentication();
+        var authRequestId = start.Status.AuthRequestId!.Value;
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.AwaitingAuthentication));
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.Authenticating));
+        Assert.True(machine.TrySetConnected(
+            authRequestId,
+            Guid.NewGuid(),
+            "remote-host",
+            "VPS Relay",
+            RemotePermission.SessionRead | RemotePermission.CommandExecute,
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+
+        var names = ConnectionMcpAdapter.BuildToolsForStatus(machine.GetSnapshot())
+            .Select(tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("longshell_connection_status", names);
+        Assert.Contains("longshell_connection_auth", names);
+        Assert.Contains("longshell_connection_connect", names);
+        Assert.Contains("longshell_connection_reconnect", names);
+        Assert.Contains("longshell_connection_close", names);
+        Assert.Contains("longshell_remote_command_start", names);
+        Assert.Contains("longshell_remote_command_receive", names);
+        Assert.DoesNotContain("longshell_remote_command_cancel", names);
+        Assert.DoesNotContain("longshell_remote_tool_cancel", names);
+        Assert.Contains("longshell_remote_tools_list", names);
+        Assert.Contains("longshell_remote_tool_call", names);
+        Assert.Contains("longshell_remote_tool_receive", names);
+    }
+
+    [Fact]
+    public void RemoteToolCancellationIsListedOnlyWithApprovedCancelPermission()
+    {
+        var machine = new LocalConnectionStateMachine();
+        var start = machine.BeginAuthentication();
+        var authRequestId = start.Status.AuthRequestId!.Value;
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.AwaitingAuthentication));
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.Authenticating));
+        Assert.True(machine.TrySetConnected(
+            authRequestId,
+            Guid.NewGuid(),
+            "remote-host",
+            "VPS Relay",
+            RemotePermission.SessionRead | RemotePermission.CommandExecute | RemotePermission.CommandCancel,
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+
+        var names = ConnectionMcpAdapter.BuildToolsForStatus(machine.GetSnapshot())
+            .Select(tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("longshell_remote_tool_cancel", names);
+    }
+
+    [Fact]
+    public void ConnectionViewDistinguishesOfflinePendingAndConnectedStates()
+    {
+        var offline = ConnectionMcpAdapter.BuildConnectionView(
+            LocalConnectionStatus.Unavailable("The desktop is not running."));
+        Assert.False(offline.GetProperty("connected").GetBoolean());
+        Assert.False(offline.GetProperty("canRequestConnection").GetBoolean());
+        Assert.Equal("start_desktop", offline.GetProperty("nextAction").GetString());
+
+        var machine = new LocalConnectionStateMachine();
+        var disconnected = ConnectionMcpAdapter.BuildConnectionView(machine.GetSnapshot());
+        Assert.True(disconnected.GetProperty("canRequestConnection").GetBoolean());
+        Assert.Equal("connect", disconnected.GetProperty("nextAction").GetString());
+
+        var authRequestId = machine.BeginAuthentication().Status.AuthRequestId!.Value;
+        var pending = ConnectionMcpAdapter.BuildConnectionView(machine.GetSnapshot());
+        Assert.False(pending.GetProperty("connected").GetBoolean());
+        Assert.Equal("complete_authentication_in_desktop", pending.GetProperty("nextAction").GetString());
+
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.AwaitingAuthentication));
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.Authenticating));
+        Assert.True(machine.TrySetConnected(
+            authRequestId,
+            Guid.NewGuid(),
+            "remote-host",
+            "VPS Relay",
+            RemotePermission.CommandExecute,
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+        var connected = ConnectionMcpAdapter.BuildConnectionView(machine.GetSnapshot());
+        Assert.True(connected.GetProperty("connected").GetBoolean());
+        Assert.Equal("use_remote_tools", connected.GetProperty("nextAction").GetString());
+
+        machine.TrySetDisconnected();
+        var dropped = ConnectionMcpAdapter.BuildConnectionView(machine.GetSnapshot());
+        Assert.False(dropped.GetProperty("connected").GetBoolean());
+        Assert.Equal("connect", dropped.GetProperty("nextAction").GetString());
+    }
+
+    [Theory]
+    [InlineData("remote.command.start", "{\"state\":\"Rejected\"}", true)]
+    [InlineData("remote.command.receive", "{\"done\":true,\"state\":\"Succeeded\"}", false)]
+    [InlineData("remote.command.receive", "{\"done\":true,\"state\":\"Failed\",\"exitCode\":1}", true)]
+    [InlineData("remote.command.receive", "{\"done\":true,\"state\":\"TimedOut\"}", true)]
+    [InlineData("remote.command.receive", "{\"done\":false,\"state\":\"Running\"}", false)]
+    [InlineData("remote.tool.receive", "{\"done\":true,\"state\":\"Cancelled\"}", true)]
+    public void CompletedOperationFailuresAreMcpErrors(string requestType, string json, bool expected)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Equal(expected, ConnectionMcpAdapter.IsCompletedOperationFailure(requestType, document.RootElement));
+    }
+}

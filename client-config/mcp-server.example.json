@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "longshell": {
+      "command": "C:\\Program Files\\LongShell\\RemoteCli.Desktop.exe",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

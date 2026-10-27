@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Common.Protocol\Common.Protocol.csproj" />
+    <ProjectReference Include="..\Common.Security\Common.Security.csproj" />
+    <ProjectReference Include="..\RemoteCli.Local\RemoteCli.Local.csproj" />
+    <ProjectReference Include="..\RemoteCli.Remote\RemoteCli.Remote.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="UI\longshell-ui.html" />
+    <EmbeddedResource Include="UI\longshell-ui.html" LogicalName="RemoteCli.Desktop.UI.longshell-ui.html" />
+    <EmbeddedResource Include="Assets\longshell-icon.ico" LogicalName="RemoteCli.Desktop.Assets.longshell-icon.ico" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets\longshell-icon.ico</ApplicationIcon>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Product>LongShell</Product>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InformationalVersion Condition="'$(LongShellBuildId)' != ''">$(LongShellBuildId)</InformationalVersion>
+    <FileVersion Condition="'$(LongShellFileVersion)' != ''">$(LongShellFileVersion)</FileVersion>
+    <!-- 单文件发布时把 WebView2 原生加载器内嵌，避免依赖解压出的 WebView2Loader.dll -->
+    <WebView2LoaderPreference>Embed</WebView2LoaderPreference>
+  </PropertyGroup>
+
+  <Target Name="RemoveReferencedExecutableRuntimeConfigFiles" AfterTargets="Publish">
+    <Delete Files="$(PublishDir)RemoteCli.Local.runtimeconfig.json;$(PublishDir)RemoteCli.Remote.runtimeconfig.json" />
+  </Target>
+
+  <!-- 单文件发布只需要 EXE，删掉 WebView2 包顺带复制出来的 XML 文档。 -->
+  <Target Name="RemoveWebView2DocumentationFiles" AfterTargets="Publish">
+    <Delete Files="$(PublishDir)Microsoft.Web.WebView2.Core.xml;$(PublishDir)Microsoft.Web.WebView2.WinForms.xml" />
+  </Target>
+
+  <!-- WebView2 包会一并引用它的 WPF 程序集，本项目只用 WinForms，去掉这条引用可避免 WindowsBase 版本冲突警告。 -->
+  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+</Project>

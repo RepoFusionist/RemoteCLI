@@ -1,0 +1,21 @@
+**/bin/
+**/obj/
+**/node_modules/
+.nuget/
+artifacts/
+*.user
+*.suo
+data/conversations/
+
+# Private machine, server, and deployment material.
+.workbuddy/
+.tmp_known_hosts
+Server/
+NewServer/
+outputs/
+tmp/
+
+# Internal working notes and instructions.
+AGENTS.md
+实施报告.md
+远程命令CLI-实现提示词.md

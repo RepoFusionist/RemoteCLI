@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "common.protocol": {
+        "type": "Project"
+      },
+      "common.security": {
+        "type": "Project",
+        "dependencies": {
+          "Common.Protocol": "[1.0.0, )"
+        }
+      }
+    },
+    "net10.0/win-x64": {}
+  }
+}

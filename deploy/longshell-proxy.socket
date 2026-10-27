@@ -1,0 +1,12 @@
+[Unit]
+Description=LongShell ingress from the existing private Docker bridge
+After=docker.service
+Requires=docker.service
+
+[Socket]
+ListenStream=172.18.0.1:18085
+FreeBind=true
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target
