@@ -78,6 +78,17 @@ public sealed class RemoteAccessAndSandboxTests
     }
 
     [Fact]
+    public void PreviewFileScopeAllowsWorkspaceRootAndRejectsOutsidePaths()
+    {
+        using var fixture = new Workspaces();
+        var scope = new RemoteFileScope(fixture.First, true);
+        Assert.Equal(Path.GetFullPath(fixture.First), scope.Resolve(fixture.First, allowRoot: true));
+        Assert.Equal(Path.Combine(fixture.First, "notes.txt"), scope.Resolve(Path.Combine(fixture.First, "notes.txt")));
+        var outside = Assert.Throws<RemoteToolException>(() => scope.Resolve(Path.Combine(fixture.Second, "secret.txt")));
+        Assert.Equal("path_outside_workspace", outside.Code);
+    }
+
+    [Fact]
     public async Task BuiltinAgentToolsSearchMoveEditAndDeleteRemoteFixtures()
     {
         using var fixture = new Workspaces();

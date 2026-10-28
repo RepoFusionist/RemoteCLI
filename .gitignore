@@ -19,3 +19,6 @@ tmp/
 AGENTS.md
 实施报告.md
 远程命令CLI-实现提示词.md
+
+# Local UI backups can contain machine-specific state.
+src/RemoteCli.Desktop/UI/*.bak-*

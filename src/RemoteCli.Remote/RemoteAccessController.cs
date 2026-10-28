@@ -28,7 +28,8 @@ public sealed class RemoteAccessController : IDisposable
 
     public void Update(RemotePermission permissions, string? workspaceRoot, bool workspaceRestricted, bool autoApproveTools)
     {
-        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute | RemotePermission.CommandCancel;
+        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute |
+            RemotePermission.CommandCancel | RemotePermission.ControllerModelUse;
         if ((permissions & ~all) != 0) throw new ArgumentOutOfRangeException(nameof(permissions));
         var root = NormalizeRoot(workspaceRoot);
         CancellationTokenSource previous;

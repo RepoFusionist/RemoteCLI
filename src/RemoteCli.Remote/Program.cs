@@ -61,6 +61,7 @@ internal static class Program
             invitation.RemoteIdentity,
             invitation.ExpiresAt,
             invitation.RequestedPermissions);
+        request = RelayInvitationCompatibility.ForRelayRegistration(request);
 
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         using var response = await httpClient.PostAsJsonAsync(
@@ -170,6 +171,7 @@ internal static class Program
                 "session.read" => RemotePermission.SessionRead,
                 "command.execute" => RemotePermission.CommandExecute,
                 "command.cancel" => RemotePermission.CommandCancel,
+                "controller.model" => RemotePermission.ControllerModelUse,
                 _ => throw new ArgumentException("Unknown permission: " + permission)
             };
         }
@@ -201,7 +203,7 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("RemoteCli.Remote invite --server <https://vps> --permissions <session.read,command.execute[,command.cancel]> [--identity <name>] [--minutes 1..10]");
+        Console.WriteLine("RemoteCli.Remote invite --server <https://vps> --permissions <session.read,command.execute[,command.cancel][,controller.model]> [--identity <name>] [--minutes 1..10]");
         Console.WriteLine("Loopback development only: add --allow-insecure-loopback and use an http://127.0.0.1 URL.");
         Console.WriteLine("The current build accepts remote PowerShell commands only inside the approved encrypted session.");
     }

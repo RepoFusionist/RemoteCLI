@@ -62,7 +62,7 @@ public static class WindowsCommandSandbox
         if (!Directory.Exists(working)) throw new RemoteToolException("working_directory_not_found", "命令工作目录不存在。");
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         var executable = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-        var profile = "LongShell.Command." + Guid.NewGuid().ToString("N");
+        var profile = "RemoteCLI.Command." + Guid.NewGuid().ToString("N");
         IntPtr sid = IntPtr.Zero, attributes = IntPtr.Zero, capabilities = IntPtr.Zero, handles = IntPtr.Zero, environment = IntPtr.Zero, packagesPolicy = IntPtr.Zero;
         IntPtr capabilityEntries = IntPtr.Zero;
         var capabilitySids = new List<IntPtr>();
@@ -73,7 +73,7 @@ public static class WindowsCommandSandbox
         try
         {
             token.ThrowIfCancellationRequested();
-            Marshal.ThrowExceptionForHR(CreateAppContainerProfile(profile, profile, "LongShell restricted remote command", IntPtr.Zero, 0, out sid));
+            Marshal.ThrowExceptionForHR(CreateAppContainerProfile(profile, profile, "Remote CLI restricted remote command", IntPtr.Zero, 0, out sid));
             var identity = new SecurityIdentifier(sid);
             Marshal.ThrowExceptionForHR(GetAppContainerFolderPath(identity.Value, out var folderPointer));
             string containerFolder;

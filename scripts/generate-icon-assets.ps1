@@ -11,7 +11,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Collections.Generic;
 
-public static class LongShellIconRenderer
+public static class RemoteCliIconRenderer
 {
     private static GraphicsPath CreateRoundedRectangle(float x, float y, float width, float height, float radius)
     {
@@ -150,5 +150,5 @@ public static class LongShellIconRenderer
 '@
 
 Add-Type -TypeDefinition $rendererSource -Language CSharp -ReferencedAssemblies @('System.Drawing.dll')
-[LongShellIconRenderer]::SaveAssets($assetDirectory)
+[RemoteCliIconRenderer]::SaveAssets($assetDirectory)
         Write-Output "Generated longshell-icon.png and longshell-icon.ico in $assetDirectory"

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
@@ -17,11 +18,11 @@ using RemoteCli.Remote;
 namespace RemoteCli.Desktop;
 
 /// <summary>
-/// WebView2 hosts the LongShell page; connection logic stays in this class and is driven
+/// WebView2 hosts the Remote CLI page; connection logic stays in this class and is driven
 /// by JSON messages from the page. The page only sees the connection authorization it created, and
 /// the remote user owns live access policy.
 /// </summary>
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private const string DefaultServer = "https://api.sunxiaochuan258.de5.net/remotecli/";
     private const string UiResourceName = "RemoteCli.Desktop.UI.longshell-ui.html";
@@ -30,10 +31,14 @@ internal sealed class MainForm : Form
     private readonly LocalConnectionStateMachine _connectionStateMachine = new();
     private readonly CancellationTokenSource _serviceLifetime = new();
     private readonly Queue<string> _pendingUiMessages = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _gatewayRequests = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _gatewayApprovals = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<ToolApprovalDecision>> _remoteToolApprovals = new();
     private readonly WebView2 _webView;
     private readonly System.Windows.Forms.Timer _mcpPresenceTimer = new() { Interval = 1_000 };
     private readonly InstalledRemoteToolStore _toolStore = new();
     private readonly RemoteAccessController _remoteAccess = new();
+    private readonly GatewayTerminalPool _gatewayTerminalPool;
 
     private LocalConnectionServiceCoordinator _connectionService = null!;
     private LocalConnectionServicePipeServer _connectionPipeServer = null!;
@@ -41,11 +46,20 @@ internal sealed class MainForm : Form
     private Guid? _currentAuthRequestId;
     private bool _uiReady;
     private bool _lastMcpPresence;
+    private bool _approveControllerModelRequests;
+    private int _controllerModelRequestActive;
+    private Func<string, CancellationToken, Task<string>>? _controllerModelRequestHandler;
+    private LocalSessionBroker? _localControllerModelBroker;
+    private RemotePermission? _remoteSessionApprovedPermissions;
     private string? _remoteWorkspaceRoot;
+    private string? _codexCliExecutablePath;
 
     public MainForm()
     {
+        _gatewayTerminalPool = new GatewayTerminalPool(workspace => new GatewayCommandSession(workspace, ApproveGatewayCommandAsync,
+            (input, token) => ApproveGatewayActionAsync("批准命令输入", "网关模型请求将以下内容发送给正在运行的本机命令。", input, token)));
         _remoteWorkspaceRoot = LoadRemoteWorkspace();
+        _codexCliExecutablePath = LoadCodexCliExecutablePath();
         try { _remoteAccess.Update(RemotePermission.SessionRead, _remoteWorkspaceRoot, true); }
         catch (IOException) { _remoteWorkspaceRoot = null; }
         using (var iconStream = Assembly.GetExecutingAssembly().GetManifestResourceStream(IconResourceName))
@@ -56,7 +70,7 @@ internal sealed class MainForm : Form
             }
         }
 
-        Text = "LongShell";
+        Text = "Remote CLI";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(760, 560);
         Size = new Size(980, 700);
@@ -78,7 +92,7 @@ internal sealed class MainForm : Form
             _connectionService.HandleAsync, LocalConnectionServicePipeServer.PipeNameForProcess(Environment.ProcessId));
         _connectionPipeServer.Listening += () => PostToUi(new { type = "service-presence", connected = true });
         _connectionPipeServer.RequestFailed += (requestId, type, code) =>
-            Trace.TraceWarning("LongShell IPC request failed requestId={0} type={1} code={2}", requestId, type, code);
+            Trace.TraceWarning("Remote CLI IPC request failed requestId={0} type={1} code={2}", requestId, type, code);
         _mcpPresenceTimer.Tick += (_, _) => RefreshMcpPresence();
 
         Shown += async (_, _) => await InitializeUiAsync();
@@ -86,6 +100,8 @@ internal sealed class MainForm : Form
         {
             _mcpPresenceTimer.Stop();
             _serviceLifetime.Cancel();
+            try { _gatewayTerminalPool.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(6)); }
+            catch (AggregateException) { }
             _operationCancellation?.Cancel();
             _connectionStateMachine.Close();
         };
@@ -97,7 +113,7 @@ internal sealed class MainForm : Form
     {
         var userDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LongShell",
+            "RemoteCLI",
             "WebView2");
 
         try
@@ -117,9 +133,9 @@ internal sealed class MainForm : Form
             {
                 MessageBox.Show(
                     this,
-                    "界面组件（WebView2 Runtime）不可用，LongShell 无法启动。\n\n" + exception.Message +
+                    "界面组件（WebView2 Runtime）不可用，Remote CLI 无法启动。\n\n" + exception.Message +
                     "\n\n首次尝试：" + firstFailure.Message,
-                    "LongShell",
+                    "Remote CLI",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 BeginInvoke(new Action(Close));
@@ -148,7 +164,7 @@ internal sealed class MainForm : Form
         using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(UiResourceName)
             ?? throw new InvalidOperationException("Embedded UI resource was not found: " + UiResourceName);
         using var reader = new StreamReader(stream, Encoding.UTF8);
-        return reader.ReadToEnd();
+        return UiAssets.Inject(reader.ReadToEnd());
     }
 
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -184,14 +200,84 @@ internal sealed class MainForm : Form
                 case "join":
                     BeginJoinSession(root);
                     break;
+                case "controller-model-request":
+                    _ = RequestControllerModelAsync(root);
+                    break;
+                case "local-controller-model-request":
+                    _ = RequestLocalControllerModelAsync(root);
+                    break;
+                case "codex-cli-detect":
+                    AutoFindCodexCliExecutable();
+                    break;
+                case "codex-cli-browse":
+                    SelectCodexCliExecutable();
+                    break;
+                case "codex-cli-save":
+                    SaveCodexCliExecutable(ReadString(root, "path"));
+                    break;
                 case "stop":
                     _ = StopFromUiAsync(ReadString(root, "role"));
                     break;
                 case "copy":
                     CopyToClipboard(ReadString(root, "text"));
                     break;
+                case "save-state":
+                    SaveUiState(root);
+                    break;
+                case "checkpoint-preview":
+                    _ = PreviewWorkspaceCheckpointAsync(root.Clone());
+                    break;
+                case "checkpoint-restore":
+                    _ = RestoreWorkspaceCheckpointAsync(root.Clone());
+                    break;
+                case "select-workspace-folder":
+                    SelectWorkspaceFolder();
+                    break;
+                case "open-workspace":
+                    OpenWorkspace(ReadString(root, "path"), ReadString(root, "mode"));
+                    break;
+                case "cancel-model-request":
+                    CancelModelRequest(ReadString(root, "requestId"));
+                    break;
+                case "discover-models":
+                    _ = DiscoverModelsAsync(root);
+                    break;
+                case "list-workspace-files":
+                    ListWorkspaceFiles(root);
+                    break;
+                case "read-workspace-file":
+                    var fileRequest = root.Clone();
+                    _ = Task.Run(() => ReadWorkspaceFile(fileRequest));
+                    break;
+                case "gateway-approval-response":
+                    ResolveGatewayApproval(root);
+                    break;
+                case "approval-response":
+                    ResolveRemoteToolApproval(root);
+                    break;
+                case "gateway-chat-request":
+                    _ = RequestGatewayChatAsync(root);
+                    break;
+                case "generate-conversation-title":
+                    _ = GenerateConversationTitleAsync(root);
+                    break;
+                case "gateway-image-select":
+                    _ = SelectGatewayImagesAsync();
+                    break;
+                case "gateway-session-close":
+                    _ = _gatewayTerminalPool.CloseAsync(ReadString(root, "conversationId"));
+                    break;
+                case "pty-watch":
+                case "pty-user-input":
+                case "pty-resize":
+                case "pty-user-stop":
+                    _ = HandleGatewayTerminalAsync(root.Clone());
+                    break;
                 case "select-workspace":
                     SelectRemoteWorkspace();
+                    break;
+                case "sync-remote-workspace":
+                    SyncRemoteWorkspace(ReadString(root, "path"));
                     break;
                 case "update-access":
                     UpdateRemoteAccess(root);
@@ -212,9 +298,12 @@ internal sealed class MainForm : Form
             userName = PreferredIdentity(),
             machineName = Environment.MachineName,
             relay = DefaultServer,
+            conversationFile = UiStatePath,
             version = Application.ProductVersion
         });
         PublishToolSettings();
+        PublishCodexCliStatus();
+        PublishUiState();
 
         while (_pendingUiMessages.Count > 0)
         {
@@ -415,7 +504,8 @@ internal sealed class MainForm : Form
                     userName,
                     credentialMode,
                     credentialExpiresAt);
-                var registration = new ConnectionAuthorizationRegistration(userName, ownerToken, request);
+                var relayRequest = RelayInvitationCompatibility.ForRelayRegistration(request);
+                var registration = new ConnectionAuthorizationRegistration(userName, ownerToken, relayRequest);
 
                 HttpResponseMessage response;
                 try
@@ -452,8 +542,16 @@ internal sealed class MainForm : Form
 
                     if (!response.IsSuccessStatusCode)
                     {
+                        var errorCode = await ReadRelayErrorCodeAsync(response, token);
+                        if (string.Equals(errorCode, "username_in_use", StringComparison.Ordinal))
+                        {
+                            throw new InvalidOperationException(
+                                "Relay 拒绝连接授权（HTTP " + (int)response.StatusCode + "：此用户名已由另一个 Remote CLI 实例占用，请关闭旧实例或更换名称后重试）。");
+                        }
+
+                        var errorDetail = errorCode is null ? string.Empty : ": " + errorCode;
                         throw new InvalidOperationException(
-                            "Relay 拒绝连接授权（HTTP " + (int)response.StatusCode + "）。");
+                            "Relay 拒绝连接授权（HTTP " + (int)response.StatusCode + errorDetail + "）。");
                     }
                 }
 
@@ -499,6 +597,7 @@ internal sealed class MainForm : Form
                         granted = ToJsPermissions(channel.ApprovedPermissions),
                         expiresAt = channel.SessionExpiresAt
                     });
+                    _remoteSessionApprovedPermissions = channel.ApprovedPermissions;
                     PostStatus(
                         "remote",
                         "被控端已进行连接；当前权限：" + FormatPermissions(channel.ApprovedPermissions) + "。",
@@ -510,7 +609,12 @@ internal sealed class MainForm : Form
                         ApproveRemoteToolAsync,
                         policy.WorkspaceRestricted,
                         policy.AutoApproveTools));
-                    await RemoteCommandSession.RunAsync(channel, token, registry, _remoteAccess);
+                    await RemoteCommandSession.RunAsync(channel, token, registry, _remoteAccess, handler =>
+                    {
+                        Volatile.Write(ref _controllerModelRequestHandler, handler);
+                    });
+                    Volatile.Write(ref _controllerModelRequestHandler, null);
+                    _remoteSessionApprovedPermissions = null;
                     PostToUi(new { type = "connection-ended", side = "remote" });
                     if (credentialMode == ConnectionCredentialMode.RotatingRandomPassword)
                     {
@@ -547,6 +651,8 @@ internal sealed class MainForm : Form
         }
         finally
         {
+            Volatile.Write(ref _controllerModelRequestHandler, null);
+            _remoteSessionApprovedPermissions = null;
             var policy = _remoteAccess.Snapshot;
             if (policy.AutoApproveTools)
             {
@@ -589,6 +695,8 @@ internal sealed class MainForm : Form
         var identity = ReadString(root, "identity").Trim();
         var userName = ReadString(root, "userName");
         var password = ReadString(root, "secret");
+        _approveControllerModelRequests = root.TryGetProperty("allowControllerModel", out var modelConsent) &&
+            modelConsent.ValueKind == JsonValueKind.True;
 
         if (string.IsNullOrWhiteSpace(identity))
         {
@@ -690,6 +798,19 @@ internal sealed class MainForm : Form
 
             password = string.Empty;
             connection.ClearSecret();
+            await using var broker = new LocalSessionBroker(
+                channel,
+                token,
+                LocalSessionBroker.PipeNameForProcess(Environment.ProcessId),
+                new CodexExecModelProvider(() => Volatile.Read(ref _codexCliExecutablePath)));
+            Volatile.Write(ref _localControllerModelBroker, broker);
+            broker.PolicyChanged += policy =>
+            {
+                _connectionStateMachine.ApplyRemotePolicy(channel.SessionId, policy);
+                PostToUi(new { type = "remote-policy", granted = ToJsPermissions(policy.Permissions),
+                    workspace = policy.WorkspaceRoot, workspaceRestricted = policy.WorkspaceRestricted });
+            };
+
             PostToUi(new
             {
                 type = "connected",
@@ -703,13 +824,6 @@ internal sealed class MainForm : Form
                 "主控端已进行连接；当前权限：" + FormatPermissions(channel.ApprovedPermissions) + "。本机 MCP 连接服务已就绪。",
                 "ok");
 
-            await using var broker = new LocalSessionBroker(channel, token, LocalSessionBroker.PipeNameForProcess(Environment.ProcessId));
-            broker.PolicyChanged += policy =>
-            {
-                _connectionStateMachine.ApplyRemotePolicy(channel.SessionId, policy);
-                PostToUi(new { type = "remote-policy", granted = ToJsPermissions(policy.Permissions),
-                    workspace = policy.WorkspaceRoot, workspaceRestricted = policy.WorkspaceRestricted });
-            };
             await broker.RunAsync();
             _connectionStateMachine.TrySetDisconnected(channel.SessionId);
             PostStatus("local", "会话已断开，可点击“重新连接”。随机密码已刷新时，请使用被控端当前显示的新密码。", "warn");
@@ -736,7 +850,9 @@ internal sealed class MainForm : Form
         }
         finally
         {
+            Interlocked.Exchange(ref _localControllerModelBroker, null);
             password = string.Empty;
+            _approveControllerModelRequests = false;
             _currentAuthRequestId = null;
             EndOperation(cancellation);
             PostToUi(new { type = "ended", side = "local" });
@@ -757,8 +873,268 @@ internal sealed class MainForm : Form
         {
             _connectionStateMachine.TrySetPhase(authRequestId, LocalConnectionState.Authenticating);
         }
-        // The remote user owns permissions; password authentication needs no controller consent dialog.
-        return Task.FromResult(announcement.RequestedPermissions);
+        var approved = announcement.RequestedPermissions;
+        if (!_approveControllerModelRequests)
+        {
+            approved &= ~RemotePermission.ControllerModelUse;
+        }
+
+        return Task.FromResult(approved);
+    }
+
+    private async Task RequestControllerModelAsync(JsonElement root)
+    {
+        var prompt = ReadString(root, "prompt");
+        var workspaceRoot = ReadString(root, "workspaceRoot");
+        if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > ProtocolConstants.MaximumControllerModelRequestCharacters)
+        {
+            PostToUi(new { type = "controller-model-response", success = false, error = "请输入不超过 8,192 个字符的问题。" });
+            return;
+        }
+
+        var handler = Volatile.Read(ref _controllerModelRequestHandler);
+        if (handler is null)
+        {
+            PostToUi(new { type = "controller-model-response", success = false, error = "当前会话未启用主控端模型请求。" });
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _controllerModelRequestActive, 1, 0) != 0)
+        {
+            PostToUi(new { type = "controller-model-response", success = false, error = "已有一个模型请求正在处理。" });
+            return;
+        }
+
+        var requestId = Guid.NewGuid().ToString("D");
+        try
+        {
+            PostToUi(new { type = "controller-model-started", requestId, prompt, cancellable = false, checkpointPending = true });
+            var checkpoint = await CaptureWorkspaceCheckpointAsync(workspaceRoot).ConfigureAwait(false);
+            PostToUi(new { type = "checkpoint-captured", requestId, checkpointId = checkpoint.Id, checkpointError = checkpoint.Error });
+            var response = await handler(prompt, CancellationToken.None).ConfigureAwait(false);
+            PostToUi(new { type = "controller-model-response", requestId, success = true, response });
+        }
+        catch (OperationCanceledException)
+        {
+            PostToUi(new { type = "controller-model-response", requestId, success = false, error = "模型请求已取消。" });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            PostToUi(new { type = "controller-model-response", requestId, success = false, error = "主控端未授权使用 Codex。" });
+        }
+        catch (TimeoutException)
+        {
+            PostToUi(new { type = "controller-model-response", requestId, success = false, error = "Codex 请求超时，请稍后重试。" });
+        }
+        catch (InvalidOperationException exception)
+        {
+            PostToUi(new { type = "controller-model-response", requestId, success = false, error = FormatControllerModelError(exception.Message) });
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            PostToUi(new { type = "controller-model-response", requestId, success = false, error = "Codex 请求失败，请检查主控端 CLI 和 MCP 配置。" });
+        }
+        finally
+        {
+            if (!string.IsNullOrEmpty(requestId)) _gatewayRequests.TryRemove(requestId, out _);
+            Interlocked.Exchange(ref _controllerModelRequestActive, 0);
+        }
+    }
+
+    private void CancelModelRequest(string requestId)
+    {
+        if (string.IsNullOrEmpty(requestId) || !_gatewayRequests.TryGetValue(requestId, out var cancellation))
+        {
+            PostToUi(new { type = "model-cancel-rejected", requestId, reason = "not_cancellable" });
+            return;
+        }
+
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task RequestLocalControllerModelAsync(JsonElement root)
+    {
+        var prompt = ReadString(root, "prompt");
+        var workspaceRoot = ReadString(root, "workspaceRoot");
+        if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > ProtocolConstants.MaximumControllerModelRequestCharacters)
+        {
+            PostToUi(new { type = "local-controller-model-response", success = false, error = "请输入不超过 8,192 个字符的问题。" });
+            return;
+        }
+
+        var broker = Volatile.Read(ref _localControllerModelBroker);
+        if (broker is null)
+        {
+            PostToUi(new { type = "local-controller-model-response", success = false, error = "请先建立主控端连接。" });
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _controllerModelRequestActive, 1, 0) != 0)
+        {
+            PostToUi(new { type = "local-controller-model-response", success = false, error = "已有一个 Codex 请求正在处理。" });
+            return;
+        }
+
+        var requestId = Guid.NewGuid().ToString("D");
+        try
+        {
+            PostToUi(new { type = "local-controller-model-started", requestId, prompt, cancellable = false, checkpointPending = true });
+            var checkpoint = await CaptureWorkspaceCheckpointAsync(workspaceRoot).ConfigureAwait(false);
+            PostToUi(new { type = "checkpoint-captured", requestId, checkpointId = checkpoint.Id, checkpointError = checkpoint.Error });
+            var result = await broker.GenerateControllerModelForLocalUiAsync(prompt, _serviceLifetime.Token).ConfigureAwait(false);
+            PostToUi(new
+            {
+                type = "local-controller-model-response",
+                requestId,
+                success = result.Success,
+                response = result.Response,
+                error = result.Success ? null : FormatControllerModelError(result.ErrorCode)
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            PostToUi(new { type = "local-controller-model-response", requestId, success = false, error = "Codex 请求已取消。" });
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or ObjectDisposedException)
+        {
+            PostToUi(new { type = "local-controller-model-response", requestId, success = false, error = "Codex 请求失败，请检查主控端 CLI 登录状态。" });
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _controllerModelRequestActive, 0);
+        }
+    }
+
+    private static string FormatControllerModelError(string? errorCode) => errorCode switch
+    {
+        "permission_denied" => "被控端已撤回主控端 Codex 权限。",
+        "model_request_busy" => "已有一个 Codex 请求正在处理。",
+        "model_session_limit" => "本次会话的 Codex 请求次数已达上限。",
+        "model_request_cancelled" => "Codex 请求已取消。",
+        "codex_cli_not_found" => "未找到 Codex CLI。请在主控端连接页点击“自动查找”或选择 codex.exe。",
+        "codex_cli_start_failed" => "找到的文件无法启动。请确认选择的是 Windows 版 Codex CLI 可执行文件。",
+        "codex_exec_timeout" => "Codex 请求超时，请稍后重试。",
+        "codex_authentication_failed" => "主控端 Codex CLI 登录已失效，请先重新登录。",
+        "codex_mcp_unavailable" => "Codex 无法连接已配置的 MCP 服务器，请检查主控端 MCP 配置和服务状态。",
+        "codex_sandbox_unavailable" => "Codex 安全隔离无法启动，请检查 Windows 沙箱组件；本次请求已停止。",
+        "codex_cli_config_invalid" => "主控端 Codex 配置文件无法解析。请检查 ~/.codex/config.toml 中的无效配置项。",
+        "codex_exec_failed" => "Codex 请求失败，请检查主控端 CLI 和 MCP 配置。",
+        "codex_empty_response" => "Codex 没有返回文字回复。",
+        "codex_response_too_large" => "Codex 回复超出长度限制。",
+        "temporary_workspace_unavailable" => "无法创建 Codex 临时工作区。",
+        "invalid_model_prompt" => "请输入不超过 8,192 个字符的问题。",
+        _ => "Codex 请求失败，请检查主控端 CLI 和 MCP 配置。"
+    };
+
+    private void AutoFindCodexCliExecutable()
+    {
+        var result = CodexCliExecutableLocator.Find();
+        if (!result.Found || string.IsNullOrWhiteSpace(result.ExecutablePath))
+        {
+            var configuredPath = Volatile.Read(ref _codexCliExecutablePath);
+            var configuredPathIsValid = CodexCliExecutableLocator.ValidateSelectedPath(configuredPath) is not null;
+            var message = configuredPathIsValid
+                ? "没有找到新的安装路径；继续保留当前已保存的 Codex CLI 路径。"
+                : "自动查找未找到 Codex CLI。请确认已安装 Windows 版 CLI，或浏览选择 codex.exe。";
+            PublishCodexCliStatus(message, isError: !configuredPathIsValid);
+            return;
+        }
+
+        SaveCodexCliExecutable(result.ExecutablePath, $"已自动找到并保存（{result.Source}）。");
+    }
+
+    private void SelectCodexCliExecutable()
+    {
+        var configuredPath = Volatile.Read(ref _codexCliExecutablePath);
+        var initialPath = CodexCliExecutableLocator.ValidateSelectedPath(configuredPath) ??
+                          CodexCliExecutableLocator.Find().ExecutablePath;
+        var initialDirectory = Path.GetDirectoryName(initialPath ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(initialDirectory) || !Directory.Exists(initialDirectory))
+        {
+            initialDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "OpenAI", "Codex", "bin");
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "选择 Windows 版 Codex CLI",
+            Filter = "Codex CLI (codex.exe)|codex.exe",
+            CheckFileExists = true,
+            Multiselect = false,
+            FileName = "codex.exe",
+            InitialDirectory = Directory.Exists(initialDirectory) ? initialDirectory : string.Empty
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            SaveCodexCliExecutable(dialog.FileName, "Codex CLI 路径已保存到本机 Remote CLI 设置。");
+        }
+    }
+
+    private void SaveCodexCliExecutable(string? path, string? successMessage = null)
+    {
+        var requestedPath = path?.Trim();
+        var executablePath = string.IsNullOrWhiteSpace(requestedPath)
+            ? null
+            : CodexCliExecutableLocator.ValidateSelectedPath(requestedPath);
+        if (!string.IsNullOrWhiteSpace(requestedPath) && executablePath is null)
+        {
+            PublishCodexCliStatus("路径无效或文件不存在。请选择 Windows 版 Codex CLI 的 .exe 文件。", requestedPath, isError: true);
+            return;
+        }
+
+        try
+        {
+            PersistCodexCliExecutablePath(executablePath);
+            Volatile.Write(ref _codexCliExecutablePath, executablePath);
+            var message = successMessage ?? (executablePath is null
+                ? "已清除手动路径，后续请求会自动查找 Codex CLI。"
+                : "Codex CLI 路径已保存到本机 Remote CLI 设置。");
+            PublishCodexCliStatus(message, executablePath ?? string.Empty);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            PublishCodexCliStatus("无法保存 Codex CLI 路径。请检查 Remote CLI 本机设置目录的写入权限。", requestedPath, isError: true);
+        }
+    }
+
+    private void PublishCodexCliStatus(string? message = null, string? pathOverride = null, bool isError = false)
+    {
+        var configuredPath = Volatile.Read(ref _codexCliExecutablePath);
+        var result = CodexCliExecutableLocator.Find(configuredPath);
+        var hasConfiguredPath = !string.IsNullOrWhiteSpace(configuredPath);
+        var configuredPathIsValid = !hasConfiguredPath ||
+                                    CodexCliExecutableLocator.ValidateSelectedPath(configuredPath) is not null;
+        var pathToDisplay = hasConfiguredPath && configuredPathIsValid
+            ? configuredPath
+            : result.ExecutablePath ?? configuredPath;
+        var defaultMessage = !configuredPathIsValid
+            ? result.Found
+                ? "已保存路径不可用；当前请求会使用自动找到的 Codex CLI。"
+                : "已保存路径不可用，且自动查找未找到 Codex CLI。请更新路径或点击自动查找。"
+            : result.Found
+                ? hasConfiguredPath
+                    ? "Codex CLI 路径已就绪。路径只保存在主控端本机。"
+                    : $"已自动找到 Codex CLI（{result.Source}）。路径只保存在主控端本机。"
+                : "未找到 Codex CLI。请点击自动查找，或浏览选择 codex.exe。";
+
+        PostToUi(new
+        {
+            type = "codex-cli-status",
+            path = pathOverride ?? pathToDisplay ?? string.Empty,
+            resolvedPath = result.ExecutablePath,
+            found = result.Found,
+            source = result.Source,
+            isConfigured = hasConfiguredPath,
+            message = message ?? defaultMessage,
+            isError = isError || !configuredPathIsValid
+        });
     }
 
     private async Task<ToolApprovalDecision> ApproveRemoteToolAsync(
@@ -766,50 +1142,57 @@ internal sealed class MainForm : Form
         CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource<ToolApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void ShowApproval()
+        var approvalId = request.RequestId.ToString("D");
+        if (!_remoteToolApprovals.TryAdd(approvalId, completion))
         {
-            if (IsDisposed || cancellationToken.IsCancellationRequested)
-            {
-                completion.TrySetCanceled(cancellationToken);
-                return;
-            }
-
-            try
-            {
-                using var dialog = new RemoteToolApprovalDialog(request);
-                _ = dialog.Handle;
-                using var registration = cancellationToken.Register(() =>
-                {
-                    try { dialog.BeginInvoke((Action)dialog.CancelForExpiredRequest); }
-                    catch (InvalidOperationException) { }
-                });
-
-                dialog.ShowDialog(this);
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    completion.TrySetCanceled(cancellationToken);
-                }
-                else
-                {
-                    completion.TrySetResult(dialog.Decision);
-                }
-            }
-            catch (Exception exception)
-            {
-                completion.TrySetException(exception);
-            }
+            return ToolApprovalDecision.Deny;
         }
 
-        if (InvokeRequired)
+        PostToUi(new
         {
-            BeginInvoke((Action)ShowApproval);
-        }
-        else
-        {
-            ShowApproval();
-        }
+            type = "approval-request",
+            approvalId,
+            approvalType = "remote-tool",
+            name = request.Name,
+            description = request.Description,
+            permission = request.PermissionDescription,
+            content = TruncateApprovalContent(request.Arguments.GetRawText())
+        });
 
-        return await completion.Task.ConfigureAwait(false);
+        using var registration = cancellationToken.Register(() =>
+        {
+            _remoteToolApprovals.TryRemove(approvalId, out _);
+            completion.TrySetCanceled(cancellationToken);
+            PostToUi(new { type = "approval-cancelled", approvalId });
+        });
+
+        try
+        {
+            return await completion.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            _remoteToolApprovals.TryRemove(approvalId, out _);
+        }
+    }
+
+    private void ResolveRemoteToolApproval(JsonElement root)
+    {
+        var approvalId = ReadString(root, "approvalId");
+        if (string.IsNullOrWhiteSpace(approvalId) || !_remoteToolApprovals.TryRemove(approvalId, out var completion)) return;
+        var decision = ReadString(root, "decision").Trim().ToLowerInvariant() switch
+        {
+            "allow_once" => ToolApprovalDecision.AllowOnce,
+            "allow_session" => ToolApprovalDecision.AllowForSession,
+            _ => ToolApprovalDecision.Deny
+        };
+        completion.TrySetResult(decision);
+    }
+
+    private static string TruncateApprovalContent(string? content)
+    {
+        var value = content ?? string.Empty;
+        return value.Length > 32768 ? value[..32768] + "\n…（内容已截断）" : value;
     }
 
     private void SelectRemoteWorkspace()
@@ -835,12 +1218,33 @@ internal sealed class MainForm : Form
         PostToUi(new { type = "toast", text = "远程工作区已切换，旧工作区中的运行操作已取消。" });
     }
 
+    private void SyncRemoteWorkspace(string path)
+    {
+        try
+        {
+            var normalized = string.IsNullOrWhiteSpace(path) ? null : RemoteAccessController.NormalizeRoot(path)
+                ?? throw new DirectoryNotFoundException("请选择有效目录。");
+            if (string.Equals(_remoteWorkspaceRoot, normalized, StringComparison.OrdinalIgnoreCase)) return;
+            _remoteAccess.Update(_remoteAccess.Snapshot.Permissions, normalized,
+                _remoteAccess.Snapshot.WorkspaceRestricted, _remoteAccess.Snapshot.AutoApproveTools);
+            _remoteWorkspaceRoot = normalized;
+            SaveRemoteWorkspace(normalized ?? "");
+            PublishToolSettings();
+            PostToUi(new { type = "toast", text = normalized is null ? "已清除远程工作区，旧工作区中的运行操作已取消。" : "远程工作区已同步到当前终端，旧工作区中的运行操作已取消。" });
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            PublishToolSettings();
+            PostToUi(new { type = "toast", text = "无法同步远程工作区：" + exception.Message });
+        }
+    }
+
     private async Task InstallRemoteToolAsync()
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "安装 LongShell 工具清单",
-            Filter = "LongShell 工具清单 (*.json)|*.json",
+            Title = "安装 Remote CLI 工具清单",
+            Filter = "Remote CLI 工具清单 (*.json)|*.json",
             CheckFileExists = true,
             Multiselect = false
         };
@@ -866,6 +1270,11 @@ internal sealed class MainForm : Form
     private void PublishToolSettings()
     {
         var names = _toolStore.LoadInstalled().Select(tool => tool.Descriptor.Name).ToArray();
+        var permissions = _remoteAccess.Snapshot.Permissions;
+        if (_remoteSessionApprovedPermissions is { } approved)
+        {
+            permissions &= approved;
+        }
         PostToUi(new
         {
             type = "tool-settings",
@@ -873,7 +1282,7 @@ internal sealed class MainForm : Form
             installedTools = names,
             workspaceRestricted = _remoteAccess.Snapshot.WorkspaceRestricted,
             autoApproveTools = _remoteAccess.Snapshot.AutoApproveTools,
-            permissions = ToJsPermissions(_remoteAccess.Snapshot.Permissions)
+            permissions = ToJsPermissions(permissions)
         });
     }
 
@@ -901,7 +1310,7 @@ internal sealed class MainForm : Form
         "开启后，远程 AI 对文件读取、修改和已安装工具的调用将不再逐项询问。" +
         "这些操作仍受当前连接权限和工作区限制，但可能读取、改写或删除工作区内容，也可能执行已安装工具声明的操作。\n\n" +
         "若关闭工作区限制，工具和命令可按当前 Windows 用户权限访问本机文件。\n\n" +
-        "只在你信任主控端和所用 AI 时开启。此设置会立即生效，并持续到关闭连接授权或退出 LongShell。\n\n" +
+        "只在你信任主控端和所用 AI 时开启。此设置会立即生效，并持续到关闭连接授权或退出 Remote CLI。\n\n" +
         "确定开启自动批准吗？",
         "自动批准风险确认",
         MessageBoxButtons.YesNo,
@@ -910,8 +1319,44 @@ internal sealed class MainForm : Form
 
     private static string SettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "LongShell",
+        "RemoteCLI",
         "settings.json");
+
+    private static string CodexCliSettingsPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "RemoteCLI",
+        "codex-cli.json");
+
+    private static string? LoadCodexCliExecutablePath()
+    {
+        try
+        {
+            if (!File.Exists(CodexCliSettingsPath))
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllBytes(CodexCliSettingsPath));
+            return document.RootElement.TryGetProperty("executablePath", out var value) &&
+                   value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static void PersistCodexCliExecutablePath(string? path)
+    {
+        var settingsPath = CodexCliSettingsPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        File.WriteAllText(
+            settingsPath,
+            JsonSerializer.Serialize(new { executablePath = path }, ProtocolJson.Options),
+            new UTF8Encoding(false));
+    }
 
     private static string? LoadRemoteWorkspace()
     {
@@ -946,6 +1391,283 @@ internal sealed class MainForm : Form
             settingsPath,
             JsonSerializer.Serialize(new { remoteWorkspace = path }, ProtocolJson.Options),
             new UTF8Encoding(false));
+    }
+
+    // ── 终端：会话持久化与自定义网关 ─────────────────────────
+
+    private static string UiStatePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "RemoteCLI",
+        "ui-state.json");
+
+    private void PublishUiState()
+    {
+        try
+        {
+            if (!File.Exists(UiStatePath))
+            {
+                return;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllBytes(UiStatePath));
+            if (document.RootElement.TryGetProperty("state", out var state))
+            {
+                PostToUi(new { type = "ui-state", state = state.Clone() });
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            Trace.TraceWarning("Remote CLI ui-state load failed: {0}", exception.Message);
+        }
+    }
+
+    private void OpenWorkspace(string path, string mode)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            PostToUi(new { type = "toast", text = "工作区文件夹不存在或不可访问。" });
+            return;
+        }
+
+        try
+        {
+            var useTerminal = string.Equals(mode, "terminal", StringComparison.Ordinal);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = useTerminal ? "wt.exe" : "explorer.exe",
+                Arguments = useTerminal ? "-d \"" + path + "\"" : "\"" + path + "\"",
+                UseShellExecute = true
+            };
+            Process.Start(startInfo);
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo { FileName = "explorer.exe", Arguments = "\"" + path + "\"", UseShellExecute = true });
+            }
+            catch (Exception fallbackException) when (fallbackException is System.ComponentModel.Win32Exception or InvalidOperationException)
+            {
+                PostToUi(new { type = "toast", text = "无法打开文件夹。" });
+            }
+        }
+    }
+
+    private void SelectWorkspaceFolder()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "选择要作为工作区的文件夹",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true
+        };
+
+        if (dialog.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
+        {
+            PostToUi(new { type = "workspace-folder", path = dialog.SelectedPath });
+        }
+        else
+        {
+            PostToUi(new { type = "workspace-folder", cancelled = true });
+        }
+    }
+
+    private void SaveUiState(JsonElement root)
+    {        try
+        {
+            if (!root.TryGetProperty("state", out var state) || state.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            var path = UiStatePath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(
+                path,
+                JsonSerializer.Serialize(new { state }, ProtocolJson.Options),
+                new UTF8Encoding(false));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Trace.TraceWarning("Remote CLI ui-state save failed: {0}", exception.Message);
+        }
+    }
+
+    // ── 工作区文件预览 ───────────────────────────────────────
+
+    private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".txt", ".md", ".markdown", ".json", ".jsonc", ".cs", ".csx", ".ts", ".tsx", ".js", ".jsx",
+        ".css", ".scss", ".html", ".htm", ".xml", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf",
+        ".ps1", ".sh", ".bat", ".cmd", ".sql", ".py", ".go", ".rs", ".java", ".kt", ".c", ".h", ".cpp",
+        ".hpp", ".sln", ".slnx", ".csproj", ".props", ".targets", ".gitignore", ".editorconfig"
+    };
+
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"
+    };
+
+    private void ListWorkspaceFiles(JsonElement root)
+    {
+        var path = ReadString(root, "path");
+        var workspaceRoot = ReadString(root, "root");
+        var requestId = ReadString(root, "requestId");
+        try
+        {
+            var scopedPath = new RemoteFileScope(workspaceRoot, true).Resolve(path, allowRoot: true);
+            if (!Directory.Exists(scopedPath))
+            {
+                PostToUi(new { type = "workspace-files", path, root = workspaceRoot, requestId, error = "目录不存在。" });
+                return;
+            }
+
+            var directory = new DirectoryInfo(scopedPath);
+            var entries = new List<object>();
+            foreach (var entry in directory.EnumerateFileSystemInfos())
+            {
+                if (entries.Count >= 400)
+                {
+                    break;
+                }
+
+                if (entry.Attributes.HasFlag(FileAttributes.Hidden) || entry.Attributes.HasFlag(FileAttributes.System) || entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    continue;
+                }
+
+                entries.Add(new
+                {
+                    name = entry.Name,
+                    path = entry.FullName,
+                    isDirectory = entry is DirectoryInfo,
+                    size = entry is FileInfo file ? file.Length : 0
+                });
+            }
+
+            entries.Sort((left, right) =>
+            {
+                dynamic a = left;
+                dynamic b = right;
+                if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+                return string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase);
+            });
+
+            PostToUi(new { type = "workspace-files", path, root = workspaceRoot, requestId, parent = directory.Parent?.FullName, entries });
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or RemoteToolException)
+        {
+            PostToUi(new { type = "workspace-files", path, root = workspaceRoot, requestId, error = "无法读取目录或目录不在工作区内。" });
+        }
+    }
+
+    private void ReadWorkspaceFile(JsonElement root)
+    {
+        var filePath = ReadString(root, "path");
+        var workspaceRoot = ReadString(root, "root");
+        var requestId = ReadString(root, "requestId");
+
+        void Fail(string error) => PostToUi(new { type = "workspace-file", path = filePath, requestId, error });
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            {
+                Fail("文件不存在。");
+                return;
+            }
+
+            var fullPath = new RemoteFileScope(workspaceRoot, true).Resolve(filePath);
+
+            var info = new FileInfo(fullPath);
+            var extension = info.Extension;
+            if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(".docx", StringComparison.OrdinalIgnoreCase) || extension.Equals(".doc", StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase) || extension.Equals(".xls", StringComparison.OrdinalIgnoreCase))
+            {
+                if (info.Length > DocumentPreview.MaxFileBytes) { Fail("文件超过 16 MiB，暂不支持预览。"); return; }
+                using var documentStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var documentBytes = DocumentPreview.ReadBounded(documentStream);
+                if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!DocumentPreview.IsPdf(documentBytes)) { Fail("PDF 文件无效或已损坏。"); return; }
+                    PostToUi(new { type = "workspace-file", path = fullPath, requestId, kind = "pdf", content = Convert.ToBase64String(documentBytes) });
+                }
+                else
+                {
+                    DocumentPreview.ValidateOfficeContainer(documentBytes, extension.ToLowerInvariant());
+                    var officePreviewEnabled = root.TryGetProperty("officePreviewEnabled", out var officeFlag) && officeFlag.ValueKind == JsonValueKind.True;
+                    if (!officePreviewEnabled)
+                    {
+                        Fail("Office 文档预览默认关闭。请到设置 → 全局工具 → Office 文档预览中开启后再试；未开启时不会下载组件。");
+                        return;
+                    }
+                    var engine = OfficeKitAssets.EnsureInstalledAsync(_serviceLifetime.Token).GetAwaiter().GetResult();
+                    var pdf = OfficeKitPreview.ConvertAsync(documentBytes, extension, engine, _serviceLifetime.Token).GetAwaiter().GetResult();
+                    DocumentPreview.Workbook? workbook = null;
+                    if (extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { workbook = DocumentPreview.ReadExcel(documentBytes); }
+                        catch (Exception exception) when (exception is IOException or ArgumentException or System.Xml.XmlException or FormatException) { }
+                    }
+                    PostToUi(new { type = "workspace-file", path = fullPath, requestId, kind = "office", content = Convert.ToBase64String(pdf), workbook });
+                }
+                return;
+            }
+            if (ImageExtensions.Contains(extension))
+            {
+                if (info.Length > 4 * 1024 * 1024)
+                {
+                    Fail("图片过大，暂不支持预览（上限 4 MiB）。");
+                    return;
+                }
+
+                var mime = extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ? "image/png"
+                    : extension.Equals(".gif", StringComparison.OrdinalIgnoreCase) ? "image/gif"
+                    : extension.Equals(".webp", StringComparison.OrdinalIgnoreCase) ? "image/webp"
+                    : extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase) ? "image/bmp"
+                    : "image/jpeg";
+                PostToUi(new
+                {
+                    type = "workspace-file",
+                    path = fullPath,
+                    requestId,
+                    kind = "image",
+                    mime,
+                    size = info.Length,
+                    content = Convert.ToBase64String(File.ReadAllBytes(fullPath))
+                });
+                return;
+            }
+
+            if (info.Length > 1024 * 1024)
+            {
+                Fail("文件超过 1 MiB，暂不支持预览。");
+                return;
+            }
+
+            var bytes = File.ReadAllBytes(fullPath);
+            var looksText = TextExtensions.Contains(extension) || Array.IndexOf(bytes, (byte)0) < 0;
+            if (!looksText)
+            {
+                PostToUi(new { type = "workspace-file", path = fullPath, requestId, kind = "binary", size = info.Length });
+                return;
+            }
+
+            PostToUi(new
+            {
+                type = "workspace-file",
+                path = fullPath,
+                requestId,
+                kind = "text",
+                size = info.Length,
+                content = Encoding.UTF8.GetString(bytes)
+            });
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or RemoteToolException or System.Xml.XmlException or FormatException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception)
+        {
+            Fail(exception is OperationCanceledException ? "文件预览已取消或超时。" : exception is OfficeKitUnavailableException ? exception.Message : "无法读取或转换文件，请确认格式有效且未受密码保护。");
+        }
     }
 
     // ── 停止 / 复制 / 服务 ────────────────────────────────────
@@ -1066,7 +1788,7 @@ internal sealed class MainForm : Form
         if (status.LastError is { } error)
         {
             Trace.TraceWarning(
-                "LongShell connection state={0} requestId={1} stage={2} code={3} retryable={4}",
+                "Remote CLI connection state={0} requestId={1} stage={2} code={3} retryable={4}",
                 status.ConnectionState,
                 error.RequestId ?? status.AuthRequestId,
                 error.Stage,
@@ -1156,6 +1878,7 @@ internal sealed class MainForm : Form
                 "session" => RemotePermission.SessionRead,
                 "execute" => RemotePermission.CommandExecute,
                 "cancel" => RemotePermission.CommandCancel,
+                "controller-model" => RemotePermission.ControllerModelUse,
                 _ => RemotePermission.None
             };
         }
@@ -1165,11 +1888,34 @@ internal sealed class MainForm : Form
 
     private static string[] ToJsPermissions(RemotePermission permissions)
     {
-        var names = new List<string>(3);
+        var names = new List<string>(4);
         if ((permissions & RemotePermission.SessionRead) != 0) names.Add("session");
         if ((permissions & RemotePermission.CommandExecute) != 0) names.Add("execute");
         if ((permissions & RemotePermission.CommandCancel) != 0) names.Add("cancel");
+        if ((permissions & RemotePermission.ControllerModelUse) != 0) names.Add("controller-model");
         return names.ToArray();
+    }
+
+    private static async Task<string?> ReadRelayErrorCodeAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            if (!document.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var value = error.GetString();
+            return !string.IsNullOrWhiteSpace(value) && value.Length <= 64 &&
+                   value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-')
+                ? value
+                : null;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException)
+        {
+            return null;
+        }
     }
 
     private static Uri ValidateServerUri(string value)
@@ -1235,6 +1981,7 @@ internal sealed class MainForm : Form
         if ((permissions & RemotePermission.SessionRead) != 0) names.Add("查看会话");
         if ((permissions & RemotePermission.CommandExecute) != 0) names.Add("执行命令");
         if ((permissions & RemotePermission.CommandCancel) != 0) names.Add("取消命令");
+        if ((permissions & RemotePermission.ControllerModelUse) != 0) names.Add("调用主控端 Codex");
         return names.Count == 0 ? "无" : string.Join("、", names);
     }
 }

@@ -215,7 +215,7 @@ public sealed class RemoteToolRegistry : IRemoteToolRegistry
         public RemoteToolDescriptor Descriptor { get; } = new(
             "remote.system_info",
             "1.0.0",
-            "Returns a bounded snapshot of the operating system and .NET runtime of this remote LongShell process.",
+            "Returns a bounded snapshot of the operating system and .NET runtime of this remote Remote CLI process.",
             ParseSchema("""
             {"type":"object","properties":{},"required":[],"additionalProperties":false}
             """),

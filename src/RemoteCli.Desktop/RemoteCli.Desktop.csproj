@@ -14,6 +14,10 @@
   <ItemGroup>
     <None Remove="UI\longshell-ui.html" />
     <EmbeddedResource Include="UI\longshell-ui.html" LogicalName="RemoteCli.Desktop.UI.longshell-ui.html" />
+    <EmbeddedResource Include="UI\vendor\xterm.js" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.js" />
+    <EmbeddedResource Include="UI\vendor\xterm.css" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.css" />
+    <EmbeddedResource Include="UI\vendor\addon-serialize.js" LogicalName="RemoteCli.Desktop.UI.vendor.addon-serialize.js" />
+    <None Update="UI\vendor\xterm.LICENSE" CopyToPublishDirectory="PreserveNewest" TargetPath="ThirdPartyNotices\xterm.LICENSE" />
     <EmbeddedResource Include="Assets\longshell-icon.ico" LogicalName="RemoteCli.Desktop.Assets.longshell-icon.ico" />
   </ItemGroup>
 
@@ -25,10 +29,10 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Product>LongShell</Product>
+    <Product>Remote CLI</Product>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <InformationalVersion Condition="'$(LongShellBuildId)' != ''">$(LongShellBuildId)</InformationalVersion>
-    <FileVersion Condition="'$(LongShellFileVersion)' != ''">$(LongShellFileVersion)</FileVersion>
+    <InformationalVersion Condition="'$(RemoteCliBuildId)' != ''">$(RemoteCliBuildId)</InformationalVersion>
+    <FileVersion Condition="'$(RemoteCliFileVersion)' != ''">$(RemoteCliFileVersion)</FileVersion>
     <!-- 单文件发布时把 WebView2 原生加载器内嵌，避免依赖解压出的 WebView2Loader.dll -->
     <WebView2LoaderPreference>Embed</WebView2LoaderPreference>
   </PropertyGroup>

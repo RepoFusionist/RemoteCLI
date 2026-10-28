@@ -6,7 +6,7 @@ using Microsoft.Win32.SafeHandles;
 namespace RemoteCli.Local;
 
 /// <summary>
-/// Finds running LongShell service hosts independently of the MCP executable directory. The process list is only a
+/// Finds running Remote CLI service hosts independently of the MCP executable directory. The process list is only a
 /// discovery hint; the MCP client also checks the actual named-pipe server PID after connecting.
 /// </summary>
 public sealed class DesktopProcessLocator

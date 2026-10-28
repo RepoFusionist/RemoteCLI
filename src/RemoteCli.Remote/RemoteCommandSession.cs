@@ -11,7 +11,8 @@ public static class RemoteCommandSession
         SecurePeerChannel channel,
         CancellationToken cancellationToken,
         IRemoteToolRegistry? toolRegistry = null,
-        RemoteAccessController? access = null)
+        RemoteAccessController? access = null,
+        Action<Func<string, CancellationToken, Task<string>>?>? controllerModelRequestHandlerChanged = null)
     {
         toolRegistry ??= RemoteToolRegistry.Default;
         var authorizer = new SessionCommandAuthorizer(channel.SessionId, channel.ApprovedPermissions, channel.SessionExpiresAt);
@@ -23,17 +24,25 @@ public static class RemoteCommandSession
         var runner = new PowerShellCommandRunner();
         var pendingTasks = new ConcurrentDictionary<Guid, Task>();
         var pendingToolTasks = new ConcurrentDictionary<Guid, Task>();
+        var pendingControllerModelRequests = new ConcurrentDictionary<Guid, TaskCompletionSource<ControllerModelResult>>();
+        using var controllerModelRequestGate = new SemaphoreSlim(1, 1);
         var toolAuthorizer = new RemoteToolCallAuthorizer(channel.SessionId, channel.ApprovedPermissions, channel.SessionExpiresAt);
+        var currentPermissions = (int)channel.ApprovedPermissions;
         long responseSequence = 0;
         long lastRemoteSequence = 0;
 
         void OnPolicyChanged(RemoteSessionPolicy policy)
         {
-            authorizer.UpdatePermissions(policy.Permissions);
-            toolAuthorizer.UpdatePermissions(policy.Permissions);
+            var effectivePolicy = policy with { Permissions = policy.Permissions & channel.ApprovedPermissions };
+            Volatile.Write(ref currentPermissions, (int)effectivePolicy.Permissions);
+            authorizer.UpdatePermissions(effectivePolicy.Permissions);
+            toolAuthorizer.UpdatePermissions(effectivePolicy.Permissions);
             foreach (var active in activeCommands.Values.Concat(activeTools.Values))
                 try { active.Cancel(); } catch (ObjectDisposedException) { }
-            _ = PublishPolicyAsync(policy);
+            if ((effectivePolicy.Permissions & RemotePermission.ControllerModelUse) == 0)
+                foreach (var pending in pendingControllerModelRequests.Values)
+                    pending.TrySetException(new UnauthorizedAccessException("controller_model_permission_denied"));
+            _ = PublishPolicyAsync(effectivePolicy);
         }
 
         async Task PublishPolicyAsync(RemoteSessionPolicy policy)
@@ -59,6 +68,57 @@ public static class RemoteCommandSession
             finally
             {
                 sendOrder.Release();
+            }
+        }
+
+        async Task<string> RequestControllerModelAsync(string prompt, CancellationToken requestCancellation)
+        {
+            using var linkedRequest = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, sessionStop.Token);
+            if (((RemotePermission)Volatile.Read(ref currentPermissions) & RemotePermission.ControllerModelUse) == 0)
+                throw new UnauthorizedAccessException("controller_model_permission_denied");
+            if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > ProtocolConstants.MaximumControllerModelRequestCharacters)
+                throw new ArgumentException("invalid_model_prompt", nameof(prompt));
+
+            await controllerModelRequestGate.WaitAsync(linkedRequest.Token).ConfigureAwait(false);
+            try
+            {
+                var requestId = Guid.NewGuid();
+                var completion = new TaskCompletionSource<ControllerModelResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!pendingControllerModelRequests.TryAdd(requestId, completion))
+                    throw new InvalidOperationException("controller_model_request_id_collision");
+
+                using var cancellationRegistration = linkedRequest.Token.Register(() => completion.TrySetCanceled(linkedRequest.Token));
+                try
+                {
+                    await SendAsync("controller.model.request", new ControllerModelRequest(
+                        ProtocolConstants.CurrentVersion,
+                        channel.SessionId,
+                        requestId,
+                        prompt), linkedRequest.Token).ConfigureAwait(false);
+                    // The controller's Codex Exec is allowed 120 seconds. Keep this caller-side
+                    // deadline longer so it can return the provider's own result instead of
+                    // timing out first while an MCP tool call or remote approval is pending.
+                    var result = await completion.Task.WaitAsync(
+                        TimeSpan.FromSeconds(ProtocolConstants.ControllerModelResponseTimeoutSeconds),
+                        linkedRequest.Token).ConfigureAwait(false);
+                    if (result.ProtocolVersion != ProtocolConstants.CurrentVersion || result.SessionId != channel.SessionId || result.RequestId != requestId)
+                        throw new InvalidDataException("Controller model response did not match the active session request.");
+                    if (!result.Success)
+                        throw new InvalidOperationException(result.ErrorCode ?? "controller_model_failed");
+                    return result.Response ?? string.Empty;
+                }
+                finally
+                {
+                    pendingControllerModelRequests.TryRemove(requestId, out _);
+                }
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException("controller_model_timeout");
+            }
+            finally
+            {
+                controllerModelRequestGate.Release();
             }
         }
 
@@ -240,10 +300,13 @@ public static class RemoteCommandSession
             {
                 access.Changed += OnPolicyChanged;
                 var initialPolicy = access.Snapshot;
+                initialPolicy = initialPolicy with { Permissions = initialPolicy.Permissions & channel.ApprovedPermissions };
+                Volatile.Write(ref currentPermissions, (int)initialPolicy.Permissions);
                 authorizer.UpdatePermissions(initialPolicy.Permissions);
                 toolAuthorizer.UpdatePermissions(initialPolicy.Permissions);
                 await SendAsync("session.policy", initialPolicy, sessionStop.Token).ConfigureAwait(false);
             }
+            controllerModelRequestHandlerChanged?.Invoke(RequestControllerModelAsync);
             while (!sessionStop.IsCancellationRequested)
             {
                 var envelope = await FramedJsonStream.ReadAsync<ProtocolEnvelope>(channel.Stream, sessionStop.Token).ConfigureAwait(false);
@@ -268,6 +331,22 @@ public static class RemoteCommandSession
                 if (envelope.Type == "session.ping")
                 {
                     await SendAsync("session.pong", new { }, sessionStop.Token).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (envelope.Type == "controller.model.result")
+                {
+                    var result = envelope.Payload.Deserialize<ControllerModelResult>(ProtocolJson.Options)
+                        ?? throw new InvalidDataException("Controller model response was empty.");
+                    if (result.ProtocolVersion == ProtocolConstants.CurrentVersion && result.SessionId == channel.SessionId &&
+                        result.RequestId != Guid.Empty &&
+                        (result.Response?.Length ?? 0) <= ProtocolConstants.MaximumControllerModelResponseCharacters &&
+                        (result.ErrorCode is null || result.ErrorCode.Length <= 64) &&
+                        pendingControllerModelRequests.TryGetValue(result.RequestId, out var pending))
+                    {
+                        pending.TrySetResult(result);
+                    }
+
                     continue;
                 }
 
@@ -423,6 +502,7 @@ public static class RemoteCommandSession
         }
         finally
         {
+            controllerModelRequestHandlerChanged?.Invoke(null);
             if (access is not null) access.Changed -= OnPolicyChanged;
             authorizer.Close();
             toolAuthorizer.Close();

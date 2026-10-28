@@ -106,7 +106,7 @@ public sealed class LocalConnectionServiceClient
                 return LocalConnectionStatus.Unavailable("The selected service exited; rediscover and select a running service before remote work.");
             selected ??= services.OrderByDescending(service => service.Status.IsUsable(DateTimeOffset.UtcNow))
                 .ThenByDescending(service => service.ProcessId).FirstOrDefault();
-            if (selected is null) return LocalConnectionStatus.Unavailable("No running LongShell service was discovered.");
+            if (selected is null) return LocalConnectionStatus.Unavailable("No running Remote CLI service was discovered.");
             _selectedProcessId = selected.ProcessId;
             _selectedSessionId = selected.Status.SessionId;
             return selected.Status;

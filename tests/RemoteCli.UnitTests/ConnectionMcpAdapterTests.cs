@@ -14,13 +14,13 @@ public sealed class ConnectionMcpAdapterTests
 
         Assert.Equal(
             [
-                "longshell_connection_auth",
-                "longshell_connection_close",
-                "longshell_connection_connect",
-                "longshell_connection_discover",
-                "longshell_connection_reconnect",
-                "longshell_connection_status",
-                "longshell_connection_wait"
+                "remotecli_connection_auth",
+                "remotecli_connection_close",
+                "remotecli_connection_connect",
+                "remotecli_connection_discover",
+                "remotecli_connection_reconnect",
+                "remotecli_connection_status",
+                "remotecli_connection_wait"
             ],
             names);
     }
@@ -45,18 +45,64 @@ public sealed class ConnectionMcpAdapterTests
             .Select(tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
 
-        Assert.Contains("longshell_connection_status", names);
-        Assert.Contains("longshell_connection_auth", names);
-        Assert.Contains("longshell_connection_connect", names);
-        Assert.Contains("longshell_connection_reconnect", names);
-        Assert.Contains("longshell_connection_close", names);
-        Assert.Contains("longshell_remote_command_start", names);
-        Assert.Contains("longshell_remote_command_receive", names);
-        Assert.DoesNotContain("longshell_remote_command_cancel", names);
-        Assert.DoesNotContain("longshell_remote_tool_cancel", names);
-        Assert.Contains("longshell_remote_tools_list", names);
-        Assert.Contains("longshell_remote_tool_call", names);
-        Assert.Contains("longshell_remote_tool_receive", names);
+        Assert.Contains("remotecli_connection_status", names);
+        Assert.Contains("remotecli_connection_auth", names);
+        Assert.Contains("remotecli_connection_connect", names);
+        Assert.Contains("remotecli_connection_reconnect", names);
+        Assert.Contains("remotecli_connection_close", names);
+        Assert.Contains("remotecli_remote_command_start", names);
+        Assert.Contains("remotecli_remote_command_receive", names);
+        Assert.DoesNotContain("remotecli_remote_command_cancel", names);
+        Assert.DoesNotContain("remotecli_remote_tool_cancel", names);
+        Assert.Contains("remotecli_remote_tools_list", names);
+        Assert.Contains("remotecli_remote_tool_call", names);
+        Assert.Contains("remotecli_remote_workspace_read", names);
+        Assert.Contains("remotecli_remote_tool_receive", names);
+    }
+
+    [Fact]
+    public void ReadOnlyConnectionAndWorkspaceToolsAreAnnotatedWhileGenericCallsAreNot()
+    {
+        var machine = new LocalConnectionStateMachine();
+        var start = machine.BeginAuthentication();
+        var authRequestId = start.Status.AuthRequestId!.Value;
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.AwaitingAuthentication));
+        Assert.True(machine.TrySetPhase(authRequestId, LocalConnectionState.Authenticating));
+        Assert.True(machine.TrySetConnected(
+            authRequestId,
+            Guid.NewGuid(),
+            "remote-host",
+            "VPS Relay",
+            RemotePermission.SessionRead | RemotePermission.CommandExecute,
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+
+        var tools = ConnectionMcpAdapter.BuildToolsForStatus(machine.GetSnapshot())
+            .ToDictionary(tool => tool.Name, StringComparer.Ordinal);
+
+        Assert.True(tools["remotecli_connection_status"].Annotations?.ReadOnlyHint);
+        Assert.True(tools["remotecli_remote_tools_list"].Annotations?.ReadOnlyHint);
+        Assert.True(tools["remotecli_remote_workspace_read"].Annotations?.ReadOnlyHint);
+        Assert.True(tools["remotecli_remote_tool_receive"].Annotations?.ReadOnlyHint);
+        Assert.Null(tools["remotecli_remote_tool_call"].Annotations?.ReadOnlyHint);
+
+        var serializedStatus = System.Text.Json.JsonSerializer.SerializeToElement(
+            tools["remotecli_connection_status"],
+            ProtocolJson.Options);
+        Assert.True(serializedStatus.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("remote.directory_list", true)]
+    [InlineData("remote.file_read", true)]
+    [InlineData("remote.file_search", true)]
+    [InlineData("remote.text_search", true)]
+    [InlineData("remote.file_info", true)]
+    [InlineData("remote.file_write", false)]
+    [InlineData("remote.file_delete", false)]
+    [InlineData("user.custom_tool", false)]
+    public void WorkspaceReadWrapperAllowsOnlyBuiltInReadTools(string toolName, bool expected)
+    {
+        Assert.Equal(expected, ConnectionMcpAdapter.IsReadOnlyWorkspaceToolName(toolName));
     }
 
     [Fact]
@@ -79,7 +125,7 @@ public sealed class ConnectionMcpAdapterTests
             .Select(tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
 
-        Assert.Contains("longshell_remote_tool_cancel", names);
+        Assert.Contains("remotecli_remote_tool_cancel", names);
     }
 
     [Fact]

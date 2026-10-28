@@ -300,7 +300,8 @@ public sealed class RelayRoomService : IAsyncDisposable
             return false;
         }
 
-        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute | RemotePermission.CommandCancel;
+        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute |
+            RemotePermission.CommandCancel | RemotePermission.ControllerModelUse;
         if ((request.RequestedPermissions & ~all) != 0)
         {
             errorCode = "invalid_permissions";

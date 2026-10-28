@@ -6,7 +6,7 @@ internal sealed class RemoteToolApprovalDialog : Form
 {
     public RemoteToolApprovalDialog(RemoteToolApprovalRequest request)
     {
-        Text = "LongShell 工具权限审批";
+        Text = "Remote CLI 工具权限审批";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;

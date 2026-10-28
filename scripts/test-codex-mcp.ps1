@@ -56,9 +56,9 @@ $dotnetArguments = @(
     '-m:1'
 )
 
-$hadOriginalTestExecutable = Test-Path Env:LONGSHELL_TEST_MCP_EXE
-$originalTestExecutable = $env:LONGSHELL_TEST_MCP_EXE
-$env:LONGSHELL_TEST_MCP_EXE = $registeredPath
+$hadOriginalTestExecutable = Test-Path Env:REMOTECLI_TEST_MCP_EXE
+$originalTestExecutable = $env:REMOTECLI_TEST_MCP_EXE
+$env:REMOTECLI_TEST_MCP_EXE = $registeredPath
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
@@ -68,10 +68,10 @@ try {
 finally {
     $ErrorActionPreference = $previousErrorActionPreference
     if ($hadOriginalTestExecutable) {
-        $env:LONGSHELL_TEST_MCP_EXE = $originalTestExecutable
+        $env:REMOTECLI_TEST_MCP_EXE = $originalTestExecutable
     }
     else {
-        Remove-Item Env:LONGSHELL_TEST_MCP_EXE -ErrorAction SilentlyContinue
+        Remove-Item Env:REMOTECLI_TEST_MCP_EXE -ErrorAction SilentlyContinue
     }
 }
 
@@ -81,7 +81,7 @@ foreach ($line in $testOutput) {
 }
 
 $connectionState = 'not reported'
-$stateMatch = [regex]::Match($testText, 'LongShell MCP local connection state:\s*([A-Za-z]+)')
+$stateMatch = [regex]::Match($testText, 'Remote CLI MCP local connection state:\s*([A-Za-z]+)')
 if ($stateMatch.Success) {
     $connectionState = $stateMatch.Groups[1].Value
 }

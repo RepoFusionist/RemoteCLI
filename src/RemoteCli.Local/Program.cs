@@ -65,7 +65,7 @@ public static class LocalCommandHost
         {
             options.ServerInfo = new Implementation
             {
-                Name = "LongShell",
+                Name = "Remote CLI",
                 Version = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "development"
             };
             options.ServerInstructions = SecurityPrompt.Text;

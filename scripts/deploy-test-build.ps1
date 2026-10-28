@@ -12,8 +12,8 @@ if ([string]::IsNullOrWhiteSpace($VersionSuffix)) {
     $VersionSuffix = Get-Date -Format 'yyyyMMdd-HHmmss'
 }
 $buildTimestamp = [DateTime]::ParseExact($VersionSuffix, 'yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture)
-$buildIdProperty = '-p:LongShellBuildId=' + $VersionSuffix
-$fileVersionProperty = '-p:LongShellFileVersion=' + $buildTimestamp.ToString('yyyy.MMdd.HHmm.ss')
+$buildIdProperty = '-p:RemoteCliBuildId=' + $VersionSuffix
+$fileVersionProperty = '-p:RemoteCliFileVersion=' + $buildTimestamp.ToString('yyyy.MMdd.HHmm.ss')
 
 $publishDirectory = Join-Path $repoRoot ("artifacts\publish\combined-win-x64-connection-service-$VersionSuffix")
 if (Test-Path -LiteralPath $publishDirectory) {
@@ -59,6 +59,100 @@ function Invoke-NativeStep {
     }
 }
 
+function Test-CodexExecutablePath {
+    param([string]$CandidatePath)
+
+    if ([string]::IsNullOrWhiteSpace($CandidatePath)) {
+        return $false
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $CandidatePath -PathType Leaf)) {
+            return $false
+        }
+    }
+    catch {
+        return $false
+    }
+
+    $fileName = Split-Path -Leaf $CandidatePath
+    return [string]::Equals($fileName, 'codex.exe', [StringComparison]::OrdinalIgnoreCase) -or
+           [string]::Equals($fileName, 'codex.cmd', [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-CodexCliPathFromConfig {
+    param([string]$ConfigPath)
+
+    if ([string]::IsNullOrWhiteSpace($ConfigPath) -or -not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        return $null
+    }
+
+    $section = ''
+    foreach ($rawLine in [System.IO.File]::ReadAllLines($ConfigPath)) {
+        $line = $rawLine.Trim()
+        if ($line.Length -eq 0 -or $line.StartsWith('#')) {
+            continue
+        }
+        if ($line.StartsWith('[')) {
+            $sectionEnd = $line.IndexOf(']')
+            $section = if ($sectionEnd -gt 0) { $line.Substring(1, $sectionEnd - 1).Trim() } else { '' }
+            continue
+        }
+        # Codex desktop writes the CLI path into this MCP env section.
+        if ($section.Length -ne 0 -and -not [string]::Equals($section, 'mcp_servers.node_repl.env', [StringComparison]::Ordinal)) {
+            continue
+        }
+        $separator = $line.IndexOf('=')
+        if ($separator -lt 0 -or -not [string]::Equals($line.Substring(0, $separator).Trim(), 'CODEX_CLI_PATH', [StringComparison]::Ordinal)) {
+            continue
+        }
+        $value = $line.Substring($separator + 1).Trim().Trim([char]34).Trim([char]39)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return $null
+}
+
+function Resolve-RemoteCliCodexCliExecutable {
+    $command = Get-Command codex -ErrorAction SilentlyContinue
+    if ($null -ne $command -and -not [string]::IsNullOrWhiteSpace($command.Source)) {
+        return $command.Source
+    }
+
+    $remoteCliSettings = Join-Path $env:LOCALAPPDATA 'RemoteCLI\codex-cli.json'
+    $configuredPath = $null
+    if (Test-Path -LiteralPath $remoteCliSettings -PathType Leaf) {
+        try {
+            $settings = (Get-Content -LiteralPath $remoteCliSettings -Raw | ConvertFrom-Json)
+            $configuredPath = $settings.executablePath
+        }
+        catch {
+            $configuredPath = $null
+        }
+    }
+
+    $codexHomeConfig = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) { $null } else { Join-Path $env:CODEX_HOME 'config.toml' }
+    $userProfileConfig = if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $null } else { Join-Path $env:USERPROFILE '.codex\config.toml' }
+    $defaultInstallPath = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { $null } else { Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin\codex.exe' }
+
+    $candidates = @(
+        $configuredPath,
+        (Get-CodexCliPathFromConfig $codexHomeConfig),
+        (Get-CodexCliPathFromConfig $userProfileConfig),
+        $defaultInstallPath
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-CodexExecutablePath $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
 $previousLocation = Get-Location
 try {
     Set-Location -LiteralPath $repoRoot
@@ -66,32 +160,57 @@ try {
     Write-Output "dotnet: $dotnetPath"
     Write-Output "Node.js: $($nodeCommand.Source)"
 
-    Invoke-NativeStep 'Restore UI test dependencies' @(
-        'ci',
-        '--prefix',
-        'tools\UiBridgeTests',
-        '--ignore-scripts',
-        '--no-audit',
-        '--no-fund',
-        '--engine-strict'
-    ) -ExecutablePath $npmCommand.Source
+    # A full `npm ci` removes the whole node_modules tree, and that bulk delete is blocked in
+    # some managed environments. `npm install --prefix` does not read the package.json under
+    # the prefix, so verify an already installed tree and only install from scratch when the
+    # UI test dependencies are missing.
+    $uiTestNodeModules = Join-Path $repoRoot 'tools\UiBridgeTests\node_modules'
+    $requiredUiTestPackages = @('@xterm\xterm', '@xterm\addon-serialize', '@xterm\headless', 'jsdom', 'playwright-core')
+    $missingUiTestPackages = @($requiredUiTestPackages | Where-Object { -not (Test-Path -LiteralPath (Join-Path $uiTestNodeModules $_)) })
+    if ($missingUiTestPackages.Count -eq 0) {
+        Invoke-NativeStep 'Verify UI test dependencies' @(
+            'ls',
+            '--prefix',
+            'tools\UiBridgeTests',
+            '--depth=0'
+        ) -ExecutablePath $npmCommand.Source
+    }
+    else {
+        Invoke-NativeStep 'Restore UI test dependencies' @(
+            'ci',
+            '--prefix',
+            'tools\UiBridgeTests',
+            '--ignore-scripts',
+            '--no-audit',
+            '--no-fund',
+            '--engine-strict'
+        ) -ExecutablePath $npmCommand.Source
+    }
 
     Invoke-NativeStep 'Embedded UI bridge tests' @(
         '--test',
         'tools\UiBridgeTests\ui-bridge.test.cjs'
     ) -ExecutablePath $nodeCommand.Source
 
-    Invoke-NativeStep 'Restore' @(
+    Invoke-NativeStep 'Restore desktop project' @(
         'restore',
-        'RemoteCli.slnx',
+        'src\RemoteCli.Desktop\RemoteCli.Desktop.csproj',
         '--ignore-failed-sources',
         '-m:1',
         '-p:NuGetAudit=false'
     )
 
-    Invoke-NativeStep 'Release build' @(
+    Invoke-NativeStep 'Restore automated test project' @(
+        'restore',
+        'tests\RemoteCli.UnitTests\RemoteCli.UnitTests.csproj',
+        '--ignore-failed-sources',
+        '-m:1',
+        '-p:NuGetAudit=false'
+    )
+
+    Invoke-NativeStep 'Release desktop build' @(
         'build',
-        'RemoteCli.slnx',
+        'src\RemoteCli.Desktop\RemoteCli.Desktop.csproj',
         '--configuration',
         'Release',
         '--no-restore',
@@ -106,23 +225,12 @@ try {
         '--configuration',
         'Release',
         '--no-restore',
-        '--no-build',
         '-m:1'
     )
 
     Invoke-NativeStep 'Restore Windows x64 publish assets' @(
         'restore',
         'src\RemoteCli.Desktop\RemoteCli.Desktop.csproj',
-        '--runtime',
-        'win-x64',
-        '--ignore-failed-sources',
-        '-m:1',
-        '-p:NuGetAudit=false'
-    )
-
-    Invoke-NativeStep 'Restore Windows x64 Clash SSH helper assets' @(
-        'restore',
-        'tools\ClashSshProxy\ClashSshProxy.csproj',
         '--runtime',
         'win-x64',
         '--ignore-failed-sources',
@@ -151,68 +259,87 @@ try {
         $publishProperty
     )
 
-    Invoke-NativeStep 'Publish Windows x64 Clash SSH helper' @(
-        'publish',
-        'tools\ClashSshProxy\ClashSshProxy.csproj',
-        '--configuration',
-        'Release',
-        '--runtime',
-        'win-x64',
-        '--self-contained',
-        'true',
-        '--no-restore',
-        '-m:1',
-        '-p:PublishSingleFile=true',
-        '-p:IncludeNativeLibrariesForSelfExtract=true',
-        '-p:DebugType=None',
-        '-p:NuGetAudit=false',
-        $publishProperty
-    )
-
     $publishedExecutable = Join-Path $publishDirectory 'RemoteCli.Desktop.exe'
     if (-not (Test-Path -LiteralPath $publishedExecutable -PathType Leaf)) {
         throw "Publish completed without the expected executable: $publishedExecutable"
     }
 
-    $publishedClashSshProxy = Join-Path $publishDirectory 'ClashSshProxy.exe'
-    if (-not (Test-Path -LiteralPath $publishedClashSshProxy -PathType Leaf)) {
-        throw "Publish completed without the expected Clash SSH helper: $publishedClashSshProxy"
+    # Keep the registered EXE intact while offering a smaller download. Store the ZIP outside
+    # the source directory so the archive cannot accidentally include itself.
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $packageDirectory = Join-Path $repoRoot 'artifacts\packages'
+    New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
+    $packagePath = Join-Path $packageDirectory ("RemoteCLI-win-x64-$VersionSuffix.zip")
+    if (Test-Path -LiteralPath $packagePath) {
+        throw "Refusing to overwrite an existing package: $packagePath"
     }
-
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
+    if (-not [Enum]::IsDefined([System.IO.Compression.CompressionLevel], 'Optimal')) {
+        throw 'The Optimal ZIP compression level is not available.'
+    }
+    $zipLevel = [System.IO.Compression.CompressionLevel]::Optimal
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($publishDirectory, $packagePath, $zipLevel, $false)
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($packagePath)
     try {
-        $proxyHelpOutput = & $publishedClashSshProxy '--help' 2>&1
-        $proxyHelpExitCode = $LASTEXITCODE
+        $exeEntry = $archive.GetEntry('RemoteCli.Desktop.exe')
+        if ($null -eq $exeEntry) { throw 'The ZIP package does not contain the published executable.' }
+        $hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+        $entryStream = $exeEntry.Open()
+        try {
+            $entryHash = ([BitConverter]::ToString($hashAlgorithm.ComputeHash($entryStream))).Replace('-', '')
+        }
+        finally { $entryStream.Dispose(); $hashAlgorithm.Dispose() }
+        if ($entryHash -ne (Get-FileHash -LiteralPath $publishedExecutable -Algorithm SHA256).Hash) {
+            throw 'The ZIP executable does not match the published executable.'
+        }
     }
-    finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
+    finally { $archive.Dispose() }
+    Write-Output "Compressed package verified: $packagePath"
 
-    $proxyHelpText = @($proxyHelpOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
-    if ($proxyHelpExitCode -ne 0 -or $proxyHelpText -notmatch 'OpenSSH ProxyCommand') {
-        throw "The published Clash SSH helper smoke check failed. $proxyHelpText"
+    # Keep the core single-file CLI small. The Office renderer is an optional sidecar that can
+    # be copied beside the EXE (or downloaded lazily on the first Office preview).
+    $officePackage = Join-Path $repoRoot 'src\RemoteCli.Desktop\Assets\libreoffice-kit-win32-x64-0.1.2.tgz'
+    if (-not (Test-Path -LiteralPath $officePackage -PathType Leaf)) {
+        throw "Office preview package is missing: $officePackage"
     }
-
-    $proxyHash = (Get-FileHash -LiteralPath $publishedClashSshProxy -Algorithm SHA256).Hash
-    $installLogPath = Join-Path $repoRoot 'artifacts\codex-mcp-install-log.md'
-    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
-    if (-not (Test-Path -LiteralPath $installLogPath)) {
-        [System.IO.File]::WriteAllText($installLogPath, "# Codex MCP installation log`r`n", $utf8WithoutBom)
+    $optionalDirectory = Join-Path $repoRoot ("artifacts\optional\RemoteCli.OfficeKit-win-x64-$VersionSuffix")
+    if (Test-Path -LiteralPath $optionalDirectory) {
+        throw "Refusing to overwrite an existing optional package: $optionalDirectory"
     }
+    New-Item -ItemType Directory -Path $optionalDirectory -Force | Out-Null
+    $optionalZip = Join-Path $optionalDirectory 'OfficeKit\libreoffice-kit-win32-x64-0.1.2.tgz.zip'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $optionalZip) -Force | Out-Null
+    Compress-Archive -LiteralPath $officePackage -DestinationPath $optionalZip -CompressionLevel Optimal
 
-    $helperTimestamp = [DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss zzz')
-    $helperRecord = "`r`n- $helperTimestamp | utility: Clash SSH ProxyCommand relay | executable: ``$publishedClashSshProxy`` | SHA-256: ``$proxyHash`` | smoke test: --help PASS | SSH connection: not attempted"
-    [System.IO.File]::AppendAllText($installLogPath, $helperRecord, $utf8WithoutBom)
+    # Codex CLI is not always on the PATH of the deployment session. Prefer PATH, then fall back
+    # to the path Remote CLI already validated, the Codex desktop config, and the default install
+    # directory, so registration still runs through the real `codex mcp` commands.
+    $codexCliExecutable = Resolve-RemoteCliCodexCliExecutable
+    if ([string]::IsNullOrWhiteSpace($codexCliExecutable)) {
+        throw 'Codex CLI was not found on PATH, in Remote CLI settings, in the Codex config, or in the default install directory.'
+    }
+    $codexCliDirectory = Split-Path -Parent $codexCliExecutable
+    if ($env:Path.Split(';') -notcontains $codexCliDirectory) {
+        $env:Path = $codexCliDirectory + ';' + $env:Path
+    }
+    Write-Output "Codex CLI: $codexCliExecutable"
 
     & (Join-Path $PSScriptRoot 'install-codex-mcp.ps1') -ExecutablePath $publishedExecutable
     & (Join-Path $PSScriptRoot 'test-codex-mcp.ps1') -ExecutablePath $publishedExecutable
 
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
     $releaseManifest = [ordered]@{
         buildId = $VersionSuffix
         executable = $publishedExecutable
         sha256 = (Get-FileHash -LiteralPath $publishedExecutable -Algorithm SHA256).Hash
+        coreSizeBytes = (Get-Item -LiteralPath $publishedExecutable).Length
+        zipPackage = $packagePath
+        zipPackageSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
+        zipSizeBytes = (Get-Item -LiteralPath $packagePath).Length
         productVersion = (Get-Item -LiteralPath $publishedExecutable).VersionInfo.ProductVersion
+        officeKitPackage = $optionalZip
+                            officeKitPackageSha256 = (Get-FileHash -LiteralPath $optionalZip -Algorithm SHA256).Hash
+                            officeKitSourceSha256 = (Get-FileHash -LiteralPath $officePackage -Algorithm SHA256).Hash
         mcpRegistration = 'remotecli'
         packagedMcpTest = 'PASS'
     }
@@ -220,7 +347,6 @@ try {
         ($releaseManifest | ConvertTo-Json), $utf8WithoutBom)
 
     Write-Output "Test deployment is ready: $publishedExecutable"
-    Write-Output "Clash-only SSH helper is ready: $publishedClashSshProxy"
 }
 finally {
     Set-Location -LiteralPath $previousLocation

@@ -24,7 +24,8 @@ public sealed class SessionCommandAuthorizer
             throw new ArgumentException("Session identifier must not be empty.", nameof(sessionId));
         }
 
-        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute | RemotePermission.CommandCancel;
+        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute |
+            RemotePermission.CommandCancel | RemotePermission.ControllerModelUse;
         if ((approvedPermissions & ~all) != 0)
         {
             throw new ArgumentOutOfRangeException(nameof(approvedPermissions));

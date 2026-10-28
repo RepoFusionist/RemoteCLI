@@ -1,4 +1,4 @@
-# LongShell 图标
+# Remote CLI 图标
 
 - `longshell-icon.svg`：可编辑的矢量源图。
 - `longshell-icon.png`：1254×1254 RGBA 主图。

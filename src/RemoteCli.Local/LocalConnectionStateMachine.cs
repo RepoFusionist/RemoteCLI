@@ -426,7 +426,8 @@ public sealed class LocalConnectionStateMachine
 
     private static bool IsValidPermissions(RemotePermission permissions)
     {
-        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute | RemotePermission.CommandCancel;
+        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute |
+            RemotePermission.CommandCancel | RemotePermission.ControllerModelUse;
         return permissions != RemotePermission.None && (permissions & ~all) == 0;
     }
 }

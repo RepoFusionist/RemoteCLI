@@ -17,6 +17,7 @@ public sealed record RemotePeerAnnouncement(
 
 public sealed class SecurePeerChannel : IAsyncDisposable
 {
+    private const int PeerHandshakeVersion = 2;
     private static readonly TimeSpan HelloPhaseTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TlsPhaseTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan MaximumPermissionApprovalTimeout = TimeSpan.FromMinutes(10);
@@ -160,6 +161,10 @@ public sealed class SecurePeerChannel : IAsyncDisposable
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck
                 }, token)).ConfigureAwait(false);
 
+            await RunBoundedPhaseAsync(
+                "TLS peer confirmation", TlsPhaseTimeout, cancellationToken,
+                token => ConfirmPeerAsync(sslStream, oneTimeSecret, sessionId, approved, isLocal: true, token)).ConfigureAwait(false);
+
             var channel = new SecurePeerChannel(sslStream, socket, null, sessionId, remoteHello.Identity, approved, expiresAt, DateTimeOffset.MaxValue);
             sslStream = null;
             remoteCertificateHash = null;
@@ -226,6 +231,11 @@ public sealed class SecurePeerChannel : IAsyncDisposable
                 token => ReceiveHelloAsync(socket, token)).ConfigureAwait(false);
             ValidateHello(localHello, sessionId, "local", oneTimeSecret, Convert.FromBase64String(remoteHello.Nonce));
 
+            if (localHello.ExpiresAtUnixSeconds != invitationExpiresAt.ToUnixTimeSeconds())
+            {
+                throw new AuthenticationException("Peer hello has an inconsistent invitation expiry.");
+            }
+
             var approved = OneTimeInvitationFactory.RestrictPermissions(requestedPermissions, localHello.Permissions);
             if (approved != localHello.Permissions || approved == RemotePermission.None)
             {
@@ -244,6 +254,10 @@ public sealed class SecurePeerChannel : IAsyncDisposable
                     EnabledSslProtocols = SslProtocols.Tls13,
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck
                 }, token)).ConfigureAwait(false);
+
+            await RunBoundedPhaseAsync(
+                "TLS peer confirmation", TlsPhaseTimeout, cancellationToken,
+                token => ConfirmPeerAsync(sslStream, oneTimeSecret, sessionId, approved, isLocal: false, token)).ConfigureAwait(false);
 
             var channel = new SecurePeerChannel(sslStream, socket, remoteCertificate, sessionId, localHello.Identity, approved, invitationExpiresAt, DateTimeOffset.MaxValue);
             sslStream = null;
@@ -314,11 +328,11 @@ public sealed class SecurePeerChannel : IAsyncDisposable
             sessionId,
             $"{role}:{identity}",
             permissions,
-            challenge);
+            BindExpiry(challenge, expiresAt.ToUnixTimeSeconds()));
         try
         {
             return new SecureHello(
-                ProtocolConstants.CurrentVersion,
+                PeerHandshakeVersion,
                 sessionId,
                 role,
                 identity,
@@ -344,7 +358,7 @@ public sealed class SecurePeerChannel : IAsyncDisposable
         string oneTimeSecret,
         byte[]? remoteNonce = null)
     {
-        if (hello.ProtocolVersion != ProtocolConstants.CurrentVersion || hello.SessionId != sessionId ||
+        if (hello.ProtocolVersion != PeerHandshakeVersion || hello.SessionId != sessionId ||
             !string.Equals(hello.Role, expectedRole, StringComparison.Ordinal))
         {
             throw new AuthenticationException("Peer hello does not match this session or role.");
@@ -393,7 +407,7 @@ public sealed class SecurePeerChannel : IAsyncDisposable
                 sessionId,
                 $"{expectedRole}:{hello.Identity}",
                 hello.Permissions,
-                challenge,
+                BindExpiry(challenge, hello.ExpiresAtUnixSeconds),
                 proof))
             {
                 throw new AuthenticationException("Peer authentication failed.");
@@ -408,6 +422,62 @@ public sealed class SecurePeerChannel : IAsyncDisposable
             }
             CryptographicOperations.ZeroMemory(proof);
             CryptographicOperations.ZeroMemory(challenge);
+        }
+    }
+
+    // Authenticate the invitation deadline along with the existing nonce and certificate binding.
+    private static byte[] BindExpiry(byte[] challenge, long expiresAt)
+    {
+        var input = new byte[challenge.Length + sizeof(long)];
+        challenge.CopyTo(input, 0);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(input.AsSpan(challenge.Length), expiresAt);
+        try { return SHA256.HashData(input); }
+        finally { CryptographicOperations.ZeroMemory(input); }
+    }
+
+    // The cleartext hello alone does not authenticate the TLS client: a relay can replay it
+    // into its own TLS connection. Fresh challenges inside TLS bind proof of the secret to
+    // this encrypted connection before either endpoint exposes its application stream.
+    private static async Task ConfirmPeerAsync(
+        Stream stream, string secret, Guid sessionId, RemotePermission permissions,
+        bool isLocal, CancellationToken cancellationToken)
+    {
+        var ownChallenge = RandomNumberGenerator.GetBytes(32);
+        var peerChallenge = new byte[32];
+        var receivedProof = new byte[32];
+        byte[]? proof = null;
+        try
+        {
+            if (isLocal)
+            {
+                await stream.ReadExactlyAsync(peerChallenge, cancellationToken).ConfigureAwait(false);
+                proof = OneTimeInvitationFactory.CreateApprovalProof(secret, sessionId, "tls-v2:local", permissions, peerChallenge);
+                await stream.WriteAsync(proof, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(ownChallenge, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await stream.ReadExactlyAsync(receivedProof, cancellationToken).ConfigureAwait(false);
+                if (!OneTimeInvitationFactory.VerifyApprovalProof(secret, sessionId, "tls-v2:remote", permissions, ownChallenge, receivedProof))
+                    throw new AuthenticationException("TLS peer confirmation failed.");
+            }
+            else
+            {
+                await stream.WriteAsync(ownChallenge, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await stream.ReadExactlyAsync(receivedProof, cancellationToken).ConfigureAwait(false);
+                if (!OneTimeInvitationFactory.VerifyApprovalProof(secret, sessionId, "tls-v2:local", permissions, ownChallenge, receivedProof))
+                    throw new AuthenticationException("TLS peer confirmation failed.");
+                await stream.ReadExactlyAsync(peerChallenge, cancellationToken).ConfigureAwait(false);
+                proof = OneTimeInvitationFactory.CreateApprovalProof(secret, sessionId, "tls-v2:remote", permissions, peerChallenge);
+                await stream.WriteAsync(proof, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(ownChallenge);
+            CryptographicOperations.ZeroMemory(peerChallenge);
+            CryptographicOperations.ZeroMemory(receivedProof);
+            if (proof is not null) CryptographicOperations.ZeroMemory(proof);
         }
     }
 

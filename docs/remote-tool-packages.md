@@ -1,7 +1,7 @@
-# LongShell 被控端工具包
+# Remote CLI 被控端工具包
 
-LongShell 的远程工具统一通过 `longshell_remote_tools_list`、`longshell_remote_tool_call`、
-`longshell_remote_tool_receive` 和 `longshell_remote_tool_cancel` 调用。工具运行在被控端，
+Remote CLI 的远程工具通过 `remotecli_remote_tools_list`、`remotecli_remote_tool_call`、
+`remotecli_remote_workspace_read`、`remotecli_remote_tool_receive` 和 `remotecli_remote_tool_cancel` 调用。工作区只读请求使用固定白名单的 `remotecli_remote_workspace_read`，不会调用命令或写文件工具，并在 MCP 元数据中标记为只读。其他工具仍通过通用 `remotecli_remote_tool_call` 调用。工具运行在被控端，
 安装与首次调用审批也由被控端用户完成。自动批准默认关闭；被控端用户可在桌面端启用，每次启用会显示风险确认。队列最多接受 16 个调用，单次审批依次显示；取消或超时会清理等待项。
 
 ## 内置工具
@@ -16,8 +16,8 @@ LongShell 的远程工具统一通过 `longshell_remote_tools_list`、`longshell
 ## 安装工具
 
 一个工具包由同目录的 JSON 清单和 `.ps1` 脚本组成。被控端在“AI 工具”区域点击“安装”，
-选择清单文件。LongShell 使用 Windows PowerShell 5.1 解析器检查脚本，再复制到当前用户的
-`%LOCALAPPDATA%\LongShell\Tools`。新工具从下一次远程会话开始出现在目录中。
+选择清单文件。Remote CLI 使用 Windows PowerShell 5.1 解析器检查脚本，再复制到当前用户的
+`%LOCALAPPDATA%\Remote CLI\Tools`。新工具从下一次远程会话开始出现在目录中。
 
 清单示例：
 

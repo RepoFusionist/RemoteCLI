@@ -35,7 +35,7 @@ return 0;
 static async Task PrintStatusAsync(McpClient client)
 {
     var result = await client.CallToolAsync(
-        "longshell_connection_status",
+        "remotecli_connection_status",
         new Dictionary<string, object?>());
     var text = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text
         ?? throw new InvalidDataException("MCP status returned no text.");

@@ -20,6 +20,29 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\LocalChatTools.cs" Link="LocalChatTools.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\PublicWebFetch.cs" Link="PublicWebFetch.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayCommandSession.cs" Link="GatewayCommandSession.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayRemoteTools.cs" Link="GatewayRemoteTools.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayPatch.cs" Link="GatewayPatch.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayExaSearch.cs" Link="GatewayExaSearch.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayImages.cs" Link="GatewayImages.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayTokenEstimate.cs" Link="GatewayTokenEstimate.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayUsage.cs" Link="GatewayUsage.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayModelOptions.cs" Link="GatewayModelOptions.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\WorkspaceCheckpoints.cs" Link="WorkspaceCheckpoints.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewaySubagents.cs" Link="GatewaySubagents.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayMcpPlugins.cs" Link="GatewayMcpPlugins.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayTerminalPool.cs" Link="GatewayTerminalPool.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewaySubagentLoop.cs" Link="GatewaySubagentLoop.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\UiAssets.cs" Link="UiAssets.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\DocumentPreview.cs" Link="DocumentPreview.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\OfficeKitPreview.cs" Link="OfficeKitPreview.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\OfficeKitAssets.cs" Link="OfficeKitAssets.cs" />
+    <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\Assets\libreoffice-kit-win32-x64-0.1.2.tgz" LogicalName="RemoteCli.Desktop.Assets.libreoffice-kit-win32-x64-0.1.2.tgz" />
+    <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\UI\vendor\xterm.js" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.js" />
+    <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\UI\vendor\xterm.css" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.css" />
+    <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\UI\vendor\addon-serialize.js" LogicalName="RemoteCli.Desktop.UI.vendor.addon-serialize.js" />
   </ItemGroup>
 
   <ItemGroup>

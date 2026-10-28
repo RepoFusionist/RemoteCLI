@@ -17,7 +17,6 @@
     --muted:#8F8C86;
     --muted-2:#6E6B66;
     --accent:#E0764E;
-    --accent-deep:#C15F3C;
     --danger:#C42B1C;
     --sans:"Noto Sans SC","Microsoft YaHei UI","Segoe UI",sans-serif;
     --serif:"Noto Serif SC","Source Han Serif SC",Georgia,serif;
@@ -73,12 +72,17 @@
   .pill[aria-selected="true"]{background:var(--bg-pill);color:var(--text);}
 
   .newchat{
-    display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;
-    border-radius:var(--r);background:var(--bg-pill);color:var(--text);
-    font-size:12.5px;margin-bottom:6px;
+    display:flex;align-items:center;justify-content:space-between;
+    height:30px;padding:0 10px;border-radius:var(--r);
+    background:var(--bg-pill);color:var(--text);font-size:12.5px;margin-bottom:6px;
   }
-  .newchat svg{color:var(--accent);}
   .newchat:hover{background:#333331;}
+  .newchat__label{display:flex;align-items:center;gap:8px;}
+  .newchat__label svg{color:var(--accent);}
+  .newchat kbd{
+    font-family:var(--sans);font-size:10.5px;color:var(--muted-2);
+    border:1px solid var(--border);border-radius:4px;padding:0 5px;line-height:1.5;
+  }
 
   .link{
     display:flex;align-items:center;gap:9px;height:28px;padding:0 10px;
@@ -102,15 +106,19 @@
   .item span{overflow:hidden;text-overflow:ellipsis;}
   .item:hover{background:var(--bg-raise);color:var(--text);}
   .item[aria-current="true"]{background:var(--bg-pill);color:var(--text);}
+  .item.is-new span::after{
+    content:"新";margin-left:6px;font-size:9.5px;color:var(--accent);
+    border:1px solid var(--accent);border-radius:3px;padding:0 3px;line-height:1.4;
+    vertical-align:1px;opacity:.9;
+  }
 
   .account{
     margin-top:auto;display:flex;align-items:center;gap:8px;
     padding:8px 10px;border-radius:var(--r);width:100%;text-align:left;
   }
   .account:hover{background:var(--bg-raise);}
-  .account svg{color:var(--accent);}
+  .account .mark{color:var(--accent);}
   .account b{font-weight:500;font-size:12.5px;}
-  .account small{color:var(--muted-2);font-size:11px;margin-left:2px;}
   .account .chev{margin-left:auto;color:var(--muted-2);}
 
   /* ── 主区 ───────────────────────────────── */
@@ -127,14 +135,36 @@
   .greet .mark{color:var(--accent);}
 
   .composer{margin-top:auto;padding:16px 0 14px;}
-  .chips{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+  .chiprow{position:relative;display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
   .chip{
-    display:flex;align-items:center;gap:6px;height:24px;padding:0 10px;
+    display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;
     border-radius:999px;background:var(--bg-chip);color:var(--muted);font-size:11.5px;
   }
   .chip:hover{color:var(--text);}
-  .chip[aria-pressed="true"]{background:var(--bg-pill);color:var(--text);}
+  .chip .x{
+    display:grid;place-items:center;width:14px;height:14px;border-radius:4px;
+    margin-right:-4px;color:var(--muted-2);
+  }
+  .chip .x:hover{color:var(--accent);background:var(--bg-raise);}
+  .chip--add{background:transparent;border:1px dashed var(--border);color:var(--muted-2);}
+  .chip--add:hover{color:var(--text);border-color:var(--muted);}
   .mascot{margin-left:auto;color:var(--accent);}
+
+  .menu{
+    position:absolute;bottom:calc(100% + 8px);left:0;min-width:190px;
+    background:var(--bg-pill);border:1px solid var(--border);border-radius:10px;
+    padding:6px;display:none;z-index:30;
+  }
+  .menu.open{display:block;}
+  .menu__title{font-size:11px;color:var(--muted-2);padding:4px 8px 6px;}
+  .menu__item{
+    display:flex;align-items:center;gap:8px;width:100%;
+    padding:7px 8px;border-radius:6px;color:var(--muted);font-size:12px;text-align:left;
+  }
+  .menu__item:hover{background:var(--bg-raise);color:var(--text);}
+  .menu__item .tick{margin-left:auto;color:var(--accent);opacity:0;}
+  .menu__item[aria-checked="true"]{color:var(--text);}
+  .menu__item[aria-checked="true"] .tick{opacity:1;}
 
   .inputbox{
     display:flex;align-items:center;gap:10px;
@@ -162,8 +192,6 @@
   .under__right{margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--muted);}
   .model{display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:6px;color:var(--muted);font-size:11.5px;}
   .model:hover{background:var(--bg-chip);color:var(--text);}
-  .ring{width:13px;height:13px;border-radius:50%;border:1.4px solid var(--muted-2);margin-left:2px;}
-  .ring:hover{border-color:var(--muted);}
 
   .toast{
     position:fixed;left:50%;bottom:120px;transform:translateX(-50%);
@@ -217,14 +245,17 @@
           首页
         </button>
         <button class="pill" aria-selected="true">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M4.5 5.5a1.8 1.8 0 1 1 1.8-1.8v8.6A1.8 1.8 0 1 0 4.5 10.5h7a1.8 1.8 0 1 0-1.8 1.8V3.7a1.8 1.8 0 1 0 1.8 1.8h-7"/></svg>
-          Code
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8.5l3.4 3L6 14.5M12.4 15h5.6" transform="translate(0 -0.5)"/></svg>
+          终端
         </button>
       </div>
 
-      <button class="newchat">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
-        新建
+      <button class="newchat" id="newChatBtn">
+        <span class="newchat__label">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+          新建对话
+        </span>
+        <kbd>Ctrl N</kbd>
       </button>
 
       <button class="link">
@@ -232,42 +263,50 @@
         自定义
       </button>
       <button class="link">
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2"/><path d="M5.4 8h5.2M8 5.4v5.2" opacity="0"/><circle cx="5.6" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="10.4" cy="8" r=".9" fill="currentColor" stroke="none"/></svg>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2"/><circle cx="5.6" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="10.4" cy="8" r=".9" fill="currentColor" stroke="none"/></svg>
         更多
       </button>
 
       <div class="group">
         <span>Chat</span>
         <span class="group__tools">
-          <button class="iconbtn" aria-label="新建会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+          <button class="iconbtn" data-add-group="chat" aria-label="在 Chat 中新建对话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
           <button class="iconbtn" aria-label="搜索会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M13.4 13.4L10.2 10.2"/></svg></button>
           <button class="iconbtn" aria-label="筛选会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3 5h10M5 8h6M7 11h2"/></svg></button>
         </span>
       </div>
-      <button class="item" data-chat><i></i><span>工具调用与命令测试</span></button>
-      <button class="item" data-chat><i></i><span>参考作业完成</span></button>
+      <div class="items" data-group-items="chat">
+        <button class="item" data-chat><i></i><span>工具调用与命令测试</span></button>
+        <button class="item" data-chat><i></i><span>参考作业完成</span></button>
+      </div>
 
       <div class="group">
         <span>longShell</span>
         <span class="group__tools">
-          <button class="iconbtn" aria-label="新建 longShell 会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+          <button class="iconbtn" data-add-group="longshell" aria-label="在 longShell 中新建对话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
         </span>
       </div>
-      <button class="item" data-chat><i></i><span>服务器 SSH 登录与服务状态</span></button>
+      <div class="items" data-group-items="longshell">
+        <button class="item" data-chat><i></i><span>服务器 SSH 登录与服务状态</span></button>
+      </div>
 
       <div class="group">
         <span>MC</span>
         <span class="group__tools">
-          <button class="iconbtn" aria-label="新建 MC 会话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+          <button class="iconbtn" data-add-group="mc" aria-label="在 MC 中新建对话"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
         </span>
       </div>
-      <button class="item" data-chat><i></i><span>本地 MCP 连接文件写入测试</span></button>
-      <button class="item" data-chat><i></i><span>本地 MCP 文件写入测试</span></button>
-      <button class="item" data-chat><i></i><span>网络爬取测试</span></button>
+      <div class="items" data-group-items="mc">
+        <button class="item" data-chat><i></i><span>本地 MCP 连接文件写入测试</span></button>
+        <button class="item" data-chat><i></i><span>本地 MCP 文件写入测试</span></button>
+        <button class="item" data-chat><i></i><span>网络爬取测试</span></button>
+      </div>
 
       <button class="account">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
-        <b>暮光星灵</b><small>网关</small>
+        <span class="mark">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="19" height="19" rx="5.5"/><path d="M7 9.2l3.2 2.8L7 14.8M12.8 15.2h4.4"/></svg>
+        </span>
+         <b>用户</b>
         <span class="chev"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg></span>
       </button>
     </aside>
@@ -276,23 +315,22 @@
       <div class="col">
         <h1 class="greet">
           <span class="mark">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v19M2.5 12h19M5.3 5.3l13.4 13.4M18.7 5.3L5.3 18.7"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="19" height="19" rx="5.5"/><path d="M7 9.2l3.2 2.8L7 14.8M12.8 15.2h4.4"/></svg>
           </span>
-          接下来做什么，暮光星灵？
+          接下来交给 LongShell 做什么？
         </h1>
 
         <div class="composer">
-          <div class="chips">
-            <button class="chip" aria-pressed="true" data-chip>
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="8" rx="1.2"/><path d="M5.5 13.4h5" stroke-linecap="round"/></svg>
-              本地
-            </button>
-            <button class="chip" aria-pressed="true" data-chip>
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l5.4 3v6.4l-5.4 3-5.4-3V4.8l5.4-3z"/><path d="M2.9 5l5.1 2.9L13.1 5M8 8v6.8"/></svg>
-              longShell
+          <div class="chiprow" id="chipRow">
+            <div class="menu" id="wsMenu" role="menu" aria-label="添加工作区">
+              <div class="menu__title">要在这条对话里挂上哪些工作区</div>
+            </div>
+            <button class="chip chip--add" id="addWsBtn" aria-haspopup="menu" aria-expanded="false">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+              工作区
             </button>
             <span class="mascot">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3L6.3 17.7"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="19" height="19" rx="5.5"/><path d="M7 9.2l3.2 2.8L7 14.8M12.8 15.2h4.4"/></svg>
             </span>
           </div>
 
@@ -307,11 +345,10 @@
             <button class="iconbtn" aria-label="添加附件">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
             </button>
-            <button class="chip chip--ghost" aria-pressed="true" data-chip>自动</button>
+            <button class="chip chip--ghost" aria-pressed="true" data-mode>自动</button>
             <span class="under__right">
-              <button class="model">Opus 5.5</button>
-              <button class="model">Medium</button>
-              <button class="ring" aria-label="更多设置"></button>
+              <button class="model">模型 · 自动</button>
+              <button class="model">输出 · 简洁</button>
             </span>
           </div>
         </div>
@@ -324,43 +361,143 @@
 <script>
 (function(){
   "use strict";
-  var $ = function(sel){ return document.querySelector(sel); };
-  var $$ = function(sel){ return Array.prototype.slice.call(document.querySelectorAll(sel)); };
+  var $  = function(sel, root){ return (root || document).querySelector(sel); };
+  var $$ = function(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
 
-  /* 侧栏收起 / 展开 */
+  /* ── 侧栏 ─────────────────────────────── */
   $("#sideBtn").addEventListener("click", function(){
     $("#app").classList.toggle("side-collapsed");
   });
 
-  /* 上下文芯片可点选 */
-  $$("[data-chip]").forEach(function(chip){
-    chip.addEventListener("click", function(){
-      chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
-    });
-  });
-
-  /* 会话条目选中反馈 */
+  var currentItem = null;
+  function selectItem(item){
+    $$("[data-chat]").forEach(function(other){ other.removeAttribute("aria-current"); });
+    if(item){ item.setAttribute("aria-current", "true"); }
+    currentItem = item;
+  }
   $$("[data-chat]").forEach(function(item){
-    item.addEventListener("click", function(){
-      $$("[data-chat]").forEach(function(other){ other.removeAttribute("aria-current"); });
-      item.setAttribute("aria-current", "true");
-    });
+    item.addEventListener("click", function(){ selectItem(item); });
   });
 
-  /* 输入与发送（预览：未接宿主） */
+  /* 新对话：命名 + 插入分组顶部 + 选中 */
+  var nameCounter = 0;
+  function nextName(){
+    nameCounter += 1;
+    return nameCounter === 1 ? "新对话" : "新对话 " + nameCounter;
+  }
+  function createConversation(groupId){
+    var list = $('[data-group-items="' + groupId + '"]');
+    if(!list) return null;
+    var item = document.createElement("button");
+    item.className = "item is-new";
+    item.setAttribute("data-chat", "");
+    item.setAttribute("title", "预览会话，尚未接入宿主");
+    var dot = document.createElement("i");
+    var label = document.createElement("span");
+    label.textContent = nextName();
+    item.appendChild(dot);
+    item.appendChild(label);
+    list.insertBefore(item, list.firstChild);
+    item.addEventListener("click", function(){ selectItem(item); });
+    selectItem(item);
+    if(item.scrollIntoView){ item.scrollIntoView({ block: "nearest" }); }
+    return item;
+  }
+  $("#newChatBtn").addEventListener("click", function(){
+    var group = currentItem && currentItem.closest("[data-group-items]");
+    createConversation(group ? group.getAttribute("data-group-items") : "chat");
+  });
+  $$("[data-add-group]").forEach(function(btn){
+    btn.addEventListener("click", function(){ createConversation(btn.getAttribute("data-add-group")); });
+  });
+
+  /* ── 工作区芯片 ───────────────────────── */
+  var WORKSPACES = [
+    { id:"local",     label:"本地",
+      icon:'<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="8" rx="1.2"/><path d="M5.5 13.4h5" stroke-linecap="round"/></svg>' },
+    { id:"longshell", label:"longShell",
+      icon:'<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l5.4 3v6.4l-5.4 3-5.4-3V4.8l5.4-3z"/><path d="M2.9 5l5.1 2.9L13.1 5M8 8v6.8"/></svg>' },
+    { id:"mc",        label:"MC",
+      icon:'<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6.5 2.8v3.4M9.5 2.8v3.4M4 6.2h8v2.6a4 4 0 0 1-8 0V6.2zM8 13.2v-1.8"/></svg>' },
+    { id:"remote",    label:"远程服务器",
+      icon:'<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.2" y="2.6" width="11.6" height="4.6" rx="1.2"/><rect x="2.2" y="8.8" width="11.6" height="4.6" rx="1.2"/><circle cx="4.9" cy="4.9" r=".8" fill="currentColor" stroke="none"/><circle cx="4.9" cy="11.1" r=".8" fill="currentColor" stroke="none"/></svg>' }
+  ];
+  var activeWorkspaces = ["local", "longshell"];
+  var chipRow = $("#chipRow"), menu = $("#wsMenu"), addBtn = $("#addWsBtn");
+
+  function buildMenu(){
+    $$(".menu__item", menu).forEach(function(row){ row.remove(); });
+    WORKSPACES.forEach(function(ws){
+      var row = document.createElement("button");
+      row.className = "menu__item";
+      row.setAttribute("role", "menuitemcheckbox");
+      row.setAttribute("aria-checked", String(activeWorkspaces.indexOf(ws.id) !== -1));
+      row.innerHTML = ws.icon + "<span>" + ws.label + "</span>" +
+        '<span class="tick"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.6L6.4 12L13 4.6"/></svg></span>';
+      row.addEventListener("click", function(){
+        toggleWorkspace(ws.id);
+        buildMenu();
+        renderChips();
+      });
+      menu.appendChild(row);
+    });
+  }
+
+  function renderChips(){
+    $$("[data-ws]", chipRow).forEach(function(chip){ chip.remove(); });
+    WORKSPACES.forEach(function(ws){
+      if(activeWorkspaces.indexOf(ws.id) === -1) return;
+      var chip = document.createElement("span");
+      chip.className = "chip";
+      chip.setAttribute("data-ws", ws.id);
+      chip.innerHTML = ws.icon + "<span>" + ws.label + "</span>";
+      var remove = document.createElement("button");
+      remove.className = "x";
+      remove.setAttribute("aria-label", "移除工作区 " + ws.label);
+      remove.innerHTML = '<svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M1.6 1.6l6.8 6.8M8.4 1.6L1.6 8.4"/></svg>';
+      remove.addEventListener("click", function(){
+        toggleWorkspace(ws.id);
+        buildMenu();
+        renderChips();
+      });
+      chip.appendChild(remove);
+      chipRow.insertBefore(chip, addBtn);
+    });
+  }
+
+  function toggleWorkspace(id){
+    var index = activeWorkspaces.indexOf(id);
+    if(index === -1){ activeWorkspaces.push(id); }
+    else{ activeWorkspaces.splice(index, 1); }
+  }
+
+  function closeMenu(){
+    menu.classList.remove("open");
+    addBtn.setAttribute("aria-expanded", "false");
+  }
+  addBtn.addEventListener("click", function(){
+    var open = !menu.classList.contains("open");
+    if(open){ buildMenu(); }
+    menu.classList.toggle("open", open);
+    addBtn.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("mousedown", function(e){
+    if(!menu.classList.contains("open")) return;
+    if(!menu.contains(e.target) && e.target !== addBtn && !addBtn.contains(e.target)){ closeMenu(); }
+  });
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape"){ closeMenu(); }
+  });
+
+  renderChips();
+
+  /* ── 输入与发送（预览：未接宿主） ─────── */
   var input = $("#msgInput"), send = $("#sendBtn");
   input.addEventListener("input", function(){
     var ready = input.value.trim().length > 0;
     send.disabled = !ready;
     send.classList.toggle("is-ready", ready);
   });
-  function trySend(){
-    if(!input.value.trim()) return;
-    var text = input.value.trim();
-    input.value = "";
-    input.dispatchEvent(new Event("input"));
-    toast("预览文件：『" + text + "』尚未接入宿主");
-  }
   function toast(message){
     var el = document.createElement("div");
     el.className = "toast";
@@ -368,9 +505,31 @@
     document.body.appendChild(el);
     setTimeout(function(){ el.remove(); }, 2000);
   }
+  function trySend(){
+    if(!input.value.trim()) return;
+    var text = input.value.trim();
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    toast("预览文件：『" + text + "』尚未接入宿主");
+  }
   send.addEventListener("click", trySend);
   input.addEventListener("keydown", function(e){
     if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); trySend(); }
+  });
+
+  /* Ctrl+N 新建对话 */
+  document.addEventListener("keydown", function(e){
+    if((e.ctrlKey || e.metaKey) && (e.key === "n" || e.key === "N")){
+      e.preventDefault();
+      $("#newChatBtn").click();
+    }
+  });
+
+  /* 模式芯片 */
+  $$("[data-mode]").forEach(function(chip){
+    chip.addEventListener("click", function(){
+      chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+    });
   });
 })();
 </script>

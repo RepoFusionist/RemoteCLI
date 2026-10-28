@@ -8,6 +8,11 @@ public static class ProtocolConstants
     public const int CurrentVersion = 1;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int MaximumCommandCharacters = 64 * 1024;
+    public const int MaximumControllerModelRequestCharacters = 8 * 1024;
+    public const int MaximumControllerModelPromptCharacters = 32 * 1024;
+    public const int MaximumControllerModelResponseCharacters = 12 * 1024;
+    public const int ControllerModelExecutionTimeoutSeconds = 120;
+    public const int ControllerModelResponseTimeoutSeconds = 135;
 }
 
 [Flags]
@@ -17,7 +22,8 @@ public enum RemotePermission
     None = 0,
     SessionRead = 1,
     CommandExecute = 2,
-    CommandCancel = 4
+    CommandCancel = 4,
+    ControllerModelUse = 8
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<RemoteSessionState>))]
@@ -182,6 +188,20 @@ public sealed record RemoteToolResult(
     string? ErrorCode,
     string? ErrorMessage);
 
+public sealed record ControllerModelRequest(
+    int ProtocolVersion,
+    Guid SessionId,
+    Guid RequestId,
+    string Prompt);
+
+public sealed record ControllerModelResult(
+    int ProtocolVersion,
+    Guid SessionId,
+    Guid RequestId,
+    bool Success,
+    string? Response,
+    string? ErrorCode);
+
 public sealed record ProtocolEnvelope(
     int ProtocolVersion,
     string Type,
@@ -207,6 +227,8 @@ public static class ProtocolJson
         "remote.tool.accepted",
         "remote.tool.cancel",
         "remote.tool.result",
+        "controller.model.request",
+        "controller.model.result",
         "session.close",
         "session.ping",
         "session.pong",

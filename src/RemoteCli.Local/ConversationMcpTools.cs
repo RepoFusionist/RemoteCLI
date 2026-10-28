@@ -57,7 +57,7 @@ public sealed class ConversationStatusTools(ConversationStore store)
 [McpServerPromptType]
 public sealed class RemoteSessionPolicyPrompt
 {
-    [McpServerPrompt(Name = "longshell-remote-policy")]
+    [McpServerPrompt(Name = "remotecli-remote-policy")]
     [Description("Read-only safety policy for one-time-authorized remote command sessions.")]
     public static IReadOnlyCollection<ChatMessage> GetPolicy() => [new(ChatRole.User, SecurityPrompt.Text)];
 }

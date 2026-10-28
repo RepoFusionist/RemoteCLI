@@ -24,7 +24,7 @@ public sealed class InstalledRemoteToolStore
     {
         _root = root ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LongShell",
+            "RemoteCLI",
             "Tools");
     }
 
@@ -48,7 +48,7 @@ public sealed class InstalledRemoteToolStore
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
             {
-                Trace.TraceWarning("Ignored invalid installed LongShell tool at {0}: {1}", directory, exception.Message);
+                Trace.TraceWarning("Ignored invalid installed Remote CLI tool at {0}: {1}", directory, exception.Message);
             }
         }
 

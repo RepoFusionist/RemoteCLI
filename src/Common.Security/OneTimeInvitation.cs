@@ -165,7 +165,8 @@ public static class OneTimeInvitationFactory
 
     private static void ValidatePermissions(RemotePermission permissions)
     {
-        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute | RemotePermission.CommandCancel;
+        const RemotePermission all = RemotePermission.SessionRead | RemotePermission.CommandExecute |
+            RemotePermission.CommandCancel | RemotePermission.ControllerModelUse;
         if ((permissions & ~all) != 0)
         {
             throw new ArgumentOutOfRangeException(nameof(permissions), "Unknown remote permission bit.");

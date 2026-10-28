@@ -43,7 +43,7 @@ public static class WebSocketConnectHelper
             var socket = socketFactory() ?? throw new InvalidOperationException("The WebSocket factory returned null.");
             try
             {
-                Trace.TraceInformation("LongShell relay WebSocket connect requestId={0} attempt={1}/{2}", requestId, attempt, maximumAttempts);
+                Trace.TraceInformation("Remote CLI relay WebSocket connect requestId={0} attempt={1}/{2}", requestId, attempt, maximumAttempts);
                 await ConnectClientAsync(socket, uri, totalCancellation.Token).ConfigureAwait(false);
                 return socket;
             }
@@ -57,7 +57,7 @@ public static class WebSocketConnectHelper
                 socket.Dispose();
                 lastFailure = exception;
                 Trace.TraceWarning(
-                    "LongShell relay WebSocket connect requestId={0} attempt={1}/{2} failure={3}",
+                    "Remote CLI relay WebSocket connect requestId={0} attempt={1}/{2} failure={3}",
                     requestId,
                     attempt,
                     maximumAttempts,

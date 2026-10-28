@@ -326,7 +326,7 @@ public sealed class RemoteToolEndToEndTests
             await CreateFile("first.txt");
             access.Update(RemotePermission.SessionRead, first, true);
             await WaitPolicy(2);
-            Assert.DoesNotContain(ConnectionMcpAdapter.BuildToolsForStatus(state.GetSnapshot()), tool => tool.Name == "longshell_remote_command_start");
+            Assert.DoesNotContain(ConnectionMcpAdapter.BuildToolsForStatus(state.GetSnapshot()), tool => tool.Name == "remotecli_remote_command_start");
             access.Update(AllToolPermissions, second, true);
             await WaitPolicy(3);
             Assert.Equal(second, state.GetSnapshot().RemoteWorkspace);
@@ -340,7 +340,7 @@ public sealed class RemoteToolEndToEndTests
             await WaitPolicy(5);
             access.Update(RemotePermission.CommandExecute | RemotePermission.CommandCancel, second, true);
             await WaitPolicy(6);
-            Assert.DoesNotContain(ConnectionMcpAdapter.BuildToolsForStatus(state.GetSnapshot()), tool => tool.Name == "longshell_remote_tools_list");
+            Assert.DoesNotContain(ConnectionMcpAdapter.BuildToolsForStatus(state.GetSnapshot()), tool => tool.Name == "remotecli_remote_tools_list");
             await CreateFile("execution-without-view.txt");
             // Cross both the original invitation deadline and an actual encrypted heartbeat round trip.
             await Task.Delay(TimeSpan.FromSeconds(21), token);
