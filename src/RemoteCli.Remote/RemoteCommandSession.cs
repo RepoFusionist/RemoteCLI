@@ -12,7 +12,8 @@ public static class RemoteCommandSession
         CancellationToken cancellationToken,
         IRemoteToolRegistry? toolRegistry = null,
         RemoteAccessController? access = null,
-        Action<Func<string, CancellationToken, Task<string>>?>? controllerModelRequestHandlerChanged = null)
+        Action<Func<ControllerModelInput, CancellationToken, Task<string>>?>? controllerModelRequestHandlerChanged = null,
+        Action<ControllerModelCatalogResult>? controllerModelCatalogChanged = null)
     {
         toolRegistry ??= RemoteToolRegistry.Default;
         var authorizer = new SessionCommandAuthorizer(channel.SessionId, channel.ApprovedPermissions, channel.SessionExpiresAt);
@@ -26,6 +27,8 @@ public static class RemoteCommandSession
         var pendingToolTasks = new ConcurrentDictionary<Guid, Task>();
         var pendingControllerModelRequests = new ConcurrentDictionary<Guid, TaskCompletionSource<ControllerModelResult>>();
         using var controllerModelRequestGate = new SemaphoreSlim(1, 1);
+        var pendingControllerModelCatalogRequests = new ConcurrentDictionary<Guid, TaskCompletionSource<ControllerModelCatalogResult>>();
+        using var controllerModelCatalogGate = new SemaphoreSlim(1, 1);
         var toolAuthorizer = new RemoteToolCallAuthorizer(channel.SessionId, channel.ApprovedPermissions, channel.SessionExpiresAt);
         var currentPermissions = (int)channel.ApprovedPermissions;
         long responseSequence = 0;
@@ -33,6 +36,7 @@ public static class RemoteCommandSession
 
         void OnPolicyChanged(RemoteSessionPolicy policy)
         {
+            var previousPermissions = (RemotePermission)Volatile.Read(ref currentPermissions);
             var effectivePolicy = policy with { Permissions = policy.Permissions & channel.ApprovedPermissions };
             Volatile.Write(ref currentPermissions, (int)effectivePolicy.Permissions);
             authorizer.UpdatePermissions(effectivePolicy.Permissions);
@@ -40,9 +44,32 @@ public static class RemoteCommandSession
             foreach (var active in activeCommands.Values.Concat(activeTools.Values))
                 try { active.Cancel(); } catch (ObjectDisposedException) { }
             if ((effectivePolicy.Permissions & RemotePermission.ControllerModelUse) == 0)
+            {
                 foreach (var pending in pendingControllerModelRequests.Values)
                     pending.TrySetException(new UnauthorizedAccessException("controller_model_permission_denied"));
+                foreach (var pending in pendingControllerModelCatalogRequests.Values)
+                    pending.TrySetException(new UnauthorizedAccessException("controller_model_permission_denied"));
+                PublishControllerModelCatalog(new ControllerModelCatalogResult(
+                    ProtocolConstants.CurrentVersion,
+                    channel.SessionId,
+                    Guid.Empty,
+                    false,
+                    [],
+                    null,
+                    null,
+                    "permission_denied"));
+            }
+            else if ((previousPermissions & RemotePermission.ControllerModelUse) == 0)
+            {
+                _ = RefreshControllerModelCatalogAsync(sessionStop.Token);
+            }
             _ = PublishPolicyAsync(effectivePolicy);
+        }
+
+        void PublishControllerModelCatalog(ControllerModelCatalogResult result)
+        {
+            try { controllerModelCatalogChanged?.Invoke(result); }
+            catch { }
         }
 
         async Task PublishPolicyAsync(RemoteSessionPolicy policy)
@@ -71,13 +98,13 @@ public static class RemoteCommandSession
             }
         }
 
-        async Task<string> RequestControllerModelAsync(string prompt, CancellationToken requestCancellation)
+        async Task<string> RequestControllerModelAsync(ControllerModelInput input, CancellationToken requestCancellation)
         {
             using var linkedRequest = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, sessionStop.Token);
             if (((RemotePermission)Volatile.Read(ref currentPermissions) & RemotePermission.ControllerModelUse) == 0)
                 throw new UnauthorizedAccessException("controller_model_permission_denied");
-            if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > ProtocolConstants.MaximumControllerModelRequestCharacters)
-                throw new ArgumentException("invalid_model_prompt", nameof(prompt));
+            if (string.IsNullOrWhiteSpace(input.Prompt) || input.Prompt.Length > ProtocolConstants.MaximumControllerModelRequestCharacters)
+                throw new ArgumentException("invalid_model_prompt", nameof(input));
 
             await controllerModelRequestGate.WaitAsync(linkedRequest.Token).ConfigureAwait(false);
             try
@@ -94,7 +121,9 @@ public static class RemoteCommandSession
                         ProtocolConstants.CurrentVersion,
                         channel.SessionId,
                         requestId,
-                        prompt), linkedRequest.Token).ConfigureAwait(false);
+                        input.Prompt,
+                        input.Model,
+                        input.ReasoningEffort), linkedRequest.Token).ConfigureAwait(false);
                     // The controller's Codex Exec is allowed 120 seconds. Keep this caller-side
                     // deadline longer so it can return the provider's own result instead of
                     // timing out first while an MCP tool call or remote approval is pending.
@@ -120,6 +149,85 @@ public static class RemoteCommandSession
             {
                 controllerModelRequestGate.Release();
             }
+        }
+
+        async Task<ControllerModelCatalogResult> RequestControllerModelCatalogAsync(CancellationToken requestCancellation)
+        {
+            using var linkedRequest = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, sessionStop.Token);
+            if (((RemotePermission)Volatile.Read(ref currentPermissions) & RemotePermission.ControllerModelUse) == 0)
+                throw new UnauthorizedAccessException("controller_model_permission_denied");
+
+            await controllerModelCatalogGate.WaitAsync(linkedRequest.Token).ConfigureAwait(false);
+            try
+            {
+                var requestId = Guid.NewGuid();
+                var completion = new TaskCompletionSource<ControllerModelCatalogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!pendingControllerModelCatalogRequests.TryAdd(requestId, completion))
+                    throw new InvalidOperationException("controller_model_catalog_request_id_collision");
+
+                using var cancellationRegistration = linkedRequest.Token.Register(() => completion.TrySetCanceled(linkedRequest.Token));
+                try
+                {
+                    await SendAsync("controller.model.catalog.request", new ControllerModelCatalogRequest(
+                        ProtocolConstants.CurrentVersion,
+                        channel.SessionId,
+                        requestId), linkedRequest.Token).ConfigureAwait(false);
+                    var result = await completion.Task.WaitAsync(
+                        TimeSpan.FromSeconds(ProtocolConstants.ControllerModelCatalogResponseTimeoutSeconds),
+                        linkedRequest.Token).ConfigureAwait(false);
+                    if (result.ProtocolVersion != ProtocolConstants.CurrentVersion || result.SessionId != channel.SessionId ||
+                        result.RequestId != requestId || result.Models is null || result.Models.Count > ProtocolConstants.MaximumControllerModelCatalogModels ||
+                        result.Models.Any(model => !IsValidControllerModelDescriptor(model)))
+                        throw new InvalidDataException("Controller model catalog did not match the active session request.");
+                    return result;
+                }
+                finally
+                {
+                    pendingControllerModelCatalogRequests.TryRemove(requestId, out _);
+                }
+            }
+            finally
+            {
+                controllerModelCatalogGate.Release();
+            }
+        }
+
+        async Task RefreshControllerModelCatalogAsync(CancellationToken requestCancellation)
+        {
+            try
+            {
+                var result = await RequestControllerModelCatalogAsync(requestCancellation).ConfigureAwait(false);
+                PublishControllerModelCatalog(result);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                PublishControllerModelCatalog(new ControllerModelCatalogResult(
+                    ProtocolConstants.CurrentVersion, channel.SessionId, Guid.Empty, false, [], null, null, "permission_denied"));
+            }
+            catch (TimeoutException)
+            {
+                PublishControllerModelCatalog(new ControllerModelCatalogResult(
+                    ProtocolConstants.CurrentVersion, channel.SessionId, Guid.Empty, false, [], null, null, "codex_model_catalog_timeout"));
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException or OperationCanceledException)
+            {
+                if (!sessionStop.IsCancellationRequested)
+                {
+                    PublishControllerModelCatalog(new ControllerModelCatalogResult(
+                        ProtocolConstants.CurrentVersion, channel.SessionId, Guid.Empty, false, [], null, null, "codex_model_catalog_unavailable"));
+                }
+            }
+        }
+
+        static bool IsValidControllerModelDescriptor(ControllerModelDescriptor model)
+        {
+            return model is not null && !string.IsNullOrWhiteSpace(model.Id) && model.Id.Length <= ProtocolConstants.MaximumControllerModelIdCharacters &&
+                   model.Id.All(character => char.IsLetterOrDigit(character) || character is '.' or '_' or ':' or '/' or '-') &&
+                   !string.IsNullOrWhiteSpace(model.DisplayName) && model.DisplayName.Length <= ProtocolConstants.MaximumControllerModelDisplayNameCharacters &&
+                   model.ReasoningEfforts is not null && model.ReasoningEfforts.Count > 0 && model.ReasoningEfforts.Count <= ProtocolConstants.MaximumControllerModelReasoningEfforts &&
+                   model.ReasoningEfforts.All(effort => effort is "low" or "medium" or "high" or "xhigh" or "max" or "ultra") &&
+                   model.DefaultReasoningEffort is "low" or "medium" or "high" or "xhigh" or "max" or "ultra" &&
+                   model.ReasoningEfforts.Contains(model.DefaultReasoningEffort, StringComparer.Ordinal);
         }
 
         async Task ExecuteCommandAsync(RemoteCommandRequest request, CancellationTokenSource commandCancellation)
@@ -307,6 +415,11 @@ public static class RemoteCommandSession
                 await SendAsync("session.policy", initialPolicy, sessionStop.Token).ConfigureAwait(false);
             }
             controllerModelRequestHandlerChanged?.Invoke(RequestControllerModelAsync);
+            var permissions = (RemotePermission)Volatile.Read(ref currentPermissions);
+            if ((permissions & RemotePermission.ControllerModelUse) != 0)
+            {
+                _ = RefreshControllerModelCatalogAsync(sessionStop.Token);
+            }
             while (!sessionStop.IsCancellationRequested)
             {
                 var envelope = await FramedJsonStream.ReadAsync<ProtocolEnvelope>(channel.Stream, sessionStop.Token).ConfigureAwait(false);
@@ -345,6 +458,22 @@ public static class RemoteCommandSession
                         pendingControllerModelRequests.TryGetValue(result.RequestId, out var pending))
                     {
                         pending.TrySetResult(result);
+                    }
+
+                    continue;
+                }
+
+                if (envelope.Type == "controller.model.catalog.result")
+                {
+                    var result = envelope.Payload.Deserialize<ControllerModelCatalogResult>(ProtocolJson.Options)
+                        ?? throw new InvalidDataException("Controller model catalog response was empty.");
+                    if (result.ProtocolVersion == ProtocolConstants.CurrentVersion && result.SessionId == channel.SessionId &&
+                        result.RequestId != Guid.Empty && result.Models is not null && result.Models.Count <= ProtocolConstants.MaximumControllerModelCatalogModels &&
+                        (result.ErrorCode is null || result.ErrorCode.Length <= 64) &&
+                        result.Models.All(IsValidControllerModelDescriptor) &&
+                        pendingControllerModelCatalogRequests.TryGetValue(result.RequestId, out var pendingCatalog))
+                    {
+                        pendingCatalog.TrySetResult(result);
                     }
 
                     continue;

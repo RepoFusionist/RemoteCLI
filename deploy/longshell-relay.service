@@ -8,6 +8,8 @@ Type=simple
 User=longshell
 Group=longshell
 WorkingDirectory=/opt/longshell/current
+StateDirectory=remotecli
+Environment=Relay__Admin__DataPath=/var/lib/remotecli/admin
 Environment=DOTNET_ROOT=/opt/longshell/runtime
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 Environment=ASPNETCORE_ENVIRONMENT=Production

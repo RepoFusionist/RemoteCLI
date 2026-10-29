@@ -57,6 +57,8 @@ else
 }
 
 builder.Services.AddSingleton<RelayRoomService>();
+var adminStore = new RelayAdminStore(builder.Configuration);
+builder.Services.AddSingleton(adminStore);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -64,7 +66,7 @@ builder.Services.AddRateLimiter(options =>
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 30,
+            PermitLimit = Math.Clamp(adminStore.RateLimitPerMinute, 1, 600),
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
@@ -80,7 +82,7 @@ if (behindTrustedReverseProxy)
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 app.UseRateLimiter();
 
-app.MapGet("/healthz", (RelayRoomService _) => Results.Json(new
+app.MapGet("/healthz", (RelayRoomService _, RelayAdminStore admin) => Results.Json(new
 {
     status = "ready",
     webSocketRelayAvailable = true,
@@ -89,8 +91,63 @@ app.MapGet("/healthz", (RelayRoomService _) => Results.Json(new
     relayPayloadInspectionAvailable = false,
     p2pAvailable = false,
     userNameAuthorizationAvailable = true,
-    clientProgramsIntegrated = true
+    clientProgramsIntegrated = true,
+    serverFingerprintSha256 = admin.ServerFingerprintSha256,
+    adminInitialized = admin.IsInitialized,
+    officialClientsOnly = admin.IsInitialized && !admin.AllowUnofficialClients
 }));
+
+app.MapGet("/admin", () => Results.Content(AdminPage.Html, "text/html; charset=utf-8"));
+app.MapGet("/admin/api/setup/status", (RelayAdminStore admin) => Results.Ok(admin.GetSetupStatus()));
+app.MapPost("/admin/api/setup", (AdminSetupRequest request, RelayAdminStore admin) =>
+{
+    if (!admin.TryInitialize(request.BootstrapKey, request.RootUser, request.Password, out var error))
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { initialized = true });
+});
+app.MapPost("/admin/api/login", (HttpContext context, AdminLoginRequest request, RelayAdminStore admin) =>
+{
+    if (!admin.TryLogin(request.RootUser, request.Password, out var token, out var error))
+    {
+        return Results.Unauthorized();
+    }
+
+    context.Response.Cookies.Append("remotecli_admin", token, new CookieOptions
+    {
+        HttpOnly = true,
+        Secure = context.Request.IsHttps,
+        SameSite = SameSiteMode.Strict,
+        MaxAge = TimeSpan.FromHours(8),
+        IsEssential = true
+    });
+    return Results.Ok(new { authenticated = true });
+});
+app.MapPost("/admin/api/logout", (HttpContext context, RelayAdminStore admin) =>
+{
+    var token = context.Request.Cookies["remotecli_admin"];
+    admin.Logout(token);
+    context.Response.Cookies.Delete("remotecli_admin");
+    return Results.NoContent();
+});
+app.MapGet("/admin/api/config", (HttpContext context, RelayAdminStore admin) =>
+    IsAdmin(context, admin) ? Results.Ok(admin.GetConfig()) : Results.Unauthorized());
+app.MapPut("/admin/api/config", (HttpContext context, AdminConfigUpdate request, RelayAdminStore admin) =>
+{
+    if (!IsAdmin(context, admin)) return Results.Unauthorized();
+    return admin.TryUpdateConfig(request, out var error)
+        ? Results.Ok(admin.GetConfig())
+        : Results.BadRequest(new { error });
+});
+app.MapPost("/admin/api/password", (HttpContext context, AdminPasswordRequest request, RelayAdminStore admin) =>
+{
+    if (!IsAdmin(context, admin)) return Results.Unauthorized();
+    return admin.TryChangePassword(request.CurrentPassword, request.NewPassword, out var error)
+        ? Results.NoContent()
+        : Results.BadRequest(new { error });
+});
 
 app.MapPost("/v1/invitations", (HttpContext context, InvitationRequest request, RelayRoomService relay) =>
 {
@@ -99,6 +156,9 @@ app.MapPost("/v1/invitations", (HttpContext context, InvitationRequest request, 
         return Results.StatusCode(StatusCodes.Status400BadRequest);
     }
 
+    var admin = context.RequestServices.GetRequiredService<RelayAdminStore>();
+    if (!IsAllowedClient(context, admin)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (!admin.IsAuthorizationLifetimeAllowed(request.ExpiresAt)) return Results.BadRequest(new { error = "authorization_lifetime_exceeded" });
     return relay.TryRegister(request, out var errorCode)
         ? Results.Accepted($"/v1/invitations/{request.SessionId:D}", new { request.SessionId, request.ExpiresAt })
         : Results.BadRequest(new { error = errorCode });
@@ -111,6 +171,10 @@ app.MapPost("/v1/authorizations", (HttpContext context, ConnectionAuthorizationR
         return Results.StatusCode(StatusCodes.Status400BadRequest);
     }
 
+    var admin = context.RequestServices.GetRequiredService<RelayAdminStore>();
+    if (!IsAllowedClient(context, admin)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (!admin.IsCredentialModeAllowed(registration.Invitation.CredentialMode)) return Results.BadRequest(new { error = "credential_mode_disabled" });
+    if (!admin.IsAuthorizationLifetimeAllowed(registration.Invitation.ExpiresAt)) return Results.BadRequest(new { error = "authorization_lifetime_exceeded" });
     return relay.TryRegisterAuthorization(registration, out var errorCode)
         ? Results.Accepted(
             "/v1/authorizations/" + Uri.EscapeDataString(registration.UserName),
@@ -125,6 +189,8 @@ app.MapGet("/v1/authorizations/{userName}", (HttpContext context, string userNam
         return Results.StatusCode(StatusCodes.Status400BadRequest);
     }
 
+    var admin = context.RequestServices.GetRequiredService<RelayAdminStore>();
+    if (!IsAllowedClient(context, admin)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     return relay.TryGetAuthorization(userName, out var request)
         ? Results.Ok(request)
         : Results.NotFound(new { error = "authorization_not_found" });
@@ -141,6 +207,8 @@ app.MapPost("/v1/authorizations/{userName}/revoke", (
         return Results.StatusCode(StatusCodes.Status400BadRequest);
     }
 
+    var admin = context.RequestServices.GetRequiredService<RelayAdminStore>();
+    if (!IsAllowedClient(context, admin)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     return relay.TryRevokeAuthorization(userName, revocation, out var errorCode)
         ? Results.NoContent()
         : Results.NotFound(new { error = errorCode });
@@ -153,6 +221,8 @@ app.MapGet("/v1/invitations/{sessionId:guid}", (HttpContext context, Guid sessio
         return Results.StatusCode(StatusCodes.Status400BadRequest);
     }
 
+    var admin = context.RequestServices.GetRequiredService<RelayAdminStore>();
+    if (!IsAllowedClient(context, admin)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     return relay.TryGetInvitation(sessionId, out var request)
         ? Results.Ok(request)
         : Results.NotFound(new { error = "invitation_not_found" });
@@ -169,6 +239,13 @@ app.MapGet("/v1/relay/{sessionId:guid}", async (HttpContext context, Guid sessio
     if (!developmentMode && !context.Request.IsHttps)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var admin = context.RequestServices.GetRequiredService<RelayAdminStore>();
+    if (!IsAllowedClient(context, admin))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
         return;
     }
 
@@ -202,3 +279,19 @@ await app.RunAsync();
 static bool IsLoopbackHost(string host) =>
     string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
     IPAddress.TryParse(host, out var address) && IPAddress.IsLoopback(address);
+
+static bool IsAdmin(HttpContext context, RelayAdminStore admin)
+{
+    return admin.IsAuthenticated(context.Request.Cookies["remotecli_admin"]);
+}
+
+static bool IsAllowedClient(HttpContext context, RelayAdminStore admin)
+{
+    return !admin.IsInitialized || admin.AllowUnofficialClients || admin.IsOfficialClient(context.Request);
+}
+
+public sealed record AdminSetupRequest(string BootstrapKey, string RootUser, string Password);
+
+public sealed record AdminLoginRequest(string RootUser, string Password);
+
+public sealed record AdminPasswordRequest(string CurrentPassword, string NewPassword);

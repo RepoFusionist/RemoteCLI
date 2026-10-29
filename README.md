@@ -2,13 +2,13 @@
 
 Remote CLI 提供 Windows 主控端、被控端和供 Agent 调用的 MCP 服务。两端经阿里云 WSS 中转配对，再建立经过密码证明和临时证书固定的 TLS 1.3 端到端通道。权限由被控端设置，主控端验证密码后直接连接。
 
-当前构建 **20261027-113838**：[Windows x64 客户端](artifacts/publish/combined-win-x64-connection-service-20261027-113838/RemoteCli.Desktop.exe)，53,550,172 字节，SHA-256 `532EC792755DC4CA553DE80734E821EDDBA6AF703ED99EAEACD2121BAB45EA7D`。最新沙盒测试包：[sandbox-test-20261027-113838](artifacts/sandbox-test-20261027-113838/)。机器可读记录见 [latest-release.json](artifacts/latest-release.json)。UI、文件产品版本和 MCP 服务版本均使用日期加时间。
+仓库提供源码、测试、构建脚本和第三方许可声明。构建产物在本机生成；知识库、日志、服务器凭据和个人配置均不纳入版本控制。
 
-唯一服务器由 [NewServer/server.json](NewServer/server.json) 指定，入口为 `https://api.sunxiaochuan258.de5.net/remotecli/`，保留 Cloudflare 小橙云。部署和回滚只经阿里云云助手执行，见 [NewServer](NewServer/README.md)。
+客户端默认中继入口为 `https://api.sunxiaochuan258.de5.net/remotecli/`。服务端部署模板和构建步骤见 [部署说明](deploy/README.md)。实际服务器配置及云助手凭据由维护者在本机管理。
 
 ## 使用
 
-桌面单文件自带 .NET，界面还需要 Microsoft WebView2 Runtime。干净虚拟机可使用 [沙盒测试包](artifacts/sandbox-test-20261027-104935/) 中的微软官方离线安装程序，步骤见 [Windows 沙盒测试](docs/windows-sandbox-testing.md)。
+桌面单文件自带 .NET，界面还需要 Microsoft WebView2 Runtime。干净虚拟机需安装微软官方 Runtime，步骤见 [Windows 沙盒测试](docs/windows-sandbox-testing.md)。
 
 1. 被控端设置用户名，选择固定或随机密码，设置权限并开启连接授权。
 2. 主控端输入被控端用户名和密码。双方校验密码证明并建立端到端 TLS，主控端不再审批权限。
@@ -30,6 +30,8 @@ Remote CLI 提供 Windows 主控端、被控端和供 Agent 调用的 MCP 服务
 关闭限制后，命令按被控端当前用户权限运行，文件工具可访问工作区外的本地路径。该开关只能由被控端更改，MCP 参数不能扩权。详见 [架构说明](docs/architecture.md)。
 
 ## MCP 与内置工具
+
+本机网关对话使用原生 Git 工作树，需安装 Git。工作树默认位于所选工作目录的 `.remotecli/worktrees/`；已有仓库从当前提交 HEAD 创建会话分支，原目录未提交改动留在原处。文件工具、命令和文件预览使用会话工作树。回退通过切换到目标提交的新工作树完成，旧工作树及未提交内容保留；没有有效 Git 提交的节点显示灰色回退按钮。工作区回退不再使用 ZIP 或整目录快照。非 Git 工作目录首次使用时会初始化 Git 并提交初始文件；已有但尚无提交的仓库需先由用户提交。
 
 同一 EXE 使用参数 `mcp` 提供 stdio 服务。MCP 发现运行中的 Remote CLI 进程，通过进程专用的当前用户管道连接，并核验实际服务 PID；桌面与 MCP 可以位于不同目录。启动 MCP 的 EXE 仍须存在，发布目录保留以供回滚。
 
@@ -60,6 +62,14 @@ Remote CLI 提供 Windows 主控端、被控端和供 Agent 调用的 MCP 服务
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-test-build.ps1
 ```
 
-脚本完成页面脚本点击测试、完整 .NET 测试、Release 构建、压缩单文件发布、Codex MCP 注册和发布版验证，并更新 `artifacts/latest-release.json`。当前通过页面 9/9、完整 98/98、打包 MCP 1/1；没有操作桌面或进行真实双机测试。
+脚本完成页面脚本点击测试、完整 .NET 测试、Release 构建、压缩单文件发布、Codex MCP 注册和发布版验证，并在本机生成 `artifacts/latest-release.json`。发布文件位于 `artifacts/publish/`，不随源码提交。注册 MCP 需要已安装且可发现的 Codex CLI。
 
-当前 WinForms 结构被 SDK 的 NETSDK1175 检查阻止裁剪及 Native AOT，因此使用保留程序集的单文件压缩，客户端比前版缩小 55.76%。见 [AOT 评估](docs/aot-trimming-assessment.md)、[实施报告](实施报告.md)、[安装日志](artifacts/codex-mcp-install-log.md)。
+桌面项目使用单文件压缩和受限的程序集裁剪配置；运行时兼容设置见 [项目文件](src/RemoteCli.Desktop/RemoteCli.Desktop.csproj)。
+
+## 源码目录
+
+- `src/`：桌面、主控端、被控端、中继以及共享协议与安全实现。
+- `tests/`：自动化测试及必要的文档样例。
+- `tools/`：MCP 探针、UI 测试和代码高亮插件的构建源码。
+- `scripts/`、`deploy/`：Windows 构建脚本及服务端部署模板。
+- `ThirdPartyNotices/`：第三方许可文本，详见 [许可声明](THIRD-PARTY-NOTICES.txt)。

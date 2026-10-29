@@ -81,6 +81,25 @@ public sealed class GatewayImagesAndSubagentsTests
     }
 
     [Fact]
+    public async Task SubagentLifecyclePublishesTraceUpdates()
+    {
+        var updates = new System.Collections.Concurrent.ConcurrentQueue<GatewaySubagentUpdate>();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new GatewaySubagents(async (_, token) =>
+        {
+            await release.Task.WaitAsync(token);
+            return "trace result";
+        }, CancellationToken.None, updates.Enqueue);
+        var tools = session.Create();
+        using var spawned = JsonDocument.Parse(await tools[0].Execute(Args(new { task = "trace this" }), CancellationToken.None));
+        var id = spawned.RootElement.GetProperty("agent_id").GetString();
+        Assert.Contains(updates, update => update.AgentId == id && update.Task == "trace this" && update.Status == "running");
+        release.SetResult();
+        await tools[1].Execute(Args(new { agent_id = id, wait_ms = 20000 }), CancellationToken.None);
+        Assert.Contains(updates, update => update.AgentId == id && update.Status == "completed" && update.Result == "trace result");
+    }
+
+    [Fact]
     public async Task SubagentCancellationAndOwnershipAreEnforced()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

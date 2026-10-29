@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ExecutablePath,
     [string]$Configuration = 'Release'
 )
@@ -87,10 +87,14 @@ if ($stateMatch.Success) {
 }
 
 $hash = (Get-FileHash -LiteralPath $registeredPath -Algorithm SHA256).Hash
-$logPath = Join-Path $repoRoot 'artifacts\codex-mcp-install-log.md'
+$logPath = Join-Path $repoRoot 'docs\knowledge-base\RemoteCLI-部署与验证日志.md'
+$logDirectory = Split-Path -Parent $logPath
+if (-not (Test-Path -LiteralPath $logDirectory)) {
+    [void](New-Item -ItemType Directory -Path $logDirectory -Force)
+}
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 if (-not (Test-Path -LiteralPath $logPath)) {
-    [System.IO.File]::WriteAllText($logPath, "# Codex MCP installation log`r`n", $utf8WithoutBom)
+    [System.IO.File]::WriteAllText($logPath, "# Remote CLI deployment and verification log`r`n`r`n## 后续日志`r`n", $utf8WithoutBom)
 }
 
 $timestamp = [DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss zzz')

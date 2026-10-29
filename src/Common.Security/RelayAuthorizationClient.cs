@@ -38,7 +38,12 @@ public static class RelayAuthorizationClient
                         Query = "role=local"
                     }.Uri;
                     var socket = await WebSocketConnectHelper.ConnectClientWithRetryAsync(
-                        static () => new ClientWebSocket(), socketUri, deadline.Token,
+                        static () =>
+                        {
+                            var clientSocket = new ClientWebSocket();
+                            clientSocket.Options.SetRequestHeader(RelayClientIdentity.HeaderName, RelayClientIdentity.HeaderValue);
+                            return clientSocket;
+                        }, socketUri, deadline.Token,
                         maximumAttempts: 1, requestId: requestId).ConfigureAwait(false);
                     return new AuthorizedRelayConnection(invitation, socket, secret);
                 }
@@ -87,8 +92,11 @@ public static class RelayAuthorizationClient
     private static async Task<InvitationRequest> ReadAuthorizationAsync(
         HttpClient client, Uri serverUri, string userName, CancellationToken cancellationToken)
     {
-        using var response = await client.GetAsync(
-            new Uri(serverUri, "v1/authorizations/" + Uri.EscapeDataString(userName)), cancellationToken)
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(serverUri, "v1/authorizations/" + Uri.EscapeDataString(userName)));
+        request.Headers.TryAddWithoutValidation(RelayClientIdentity.HeaderName, RelayClientIdentity.HeaderValue);
+        using var response = await client.SendAsync(request, cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {

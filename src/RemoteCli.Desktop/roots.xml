@@ -1,0 +1,8 @@
+<linker>
+  <!-- Classic COM runtime marshalers are reached through runtime internals, so the trimmer cannot see them. -->
+  <assembly fullname="System.Private.CoreLib">
+    <type fullname="System.StubHelpers.InterfaceMarshaler" preserve="all" />
+    <type fullname="System.StubHelpers.ObjectMarshaler" preserve="all" />
+    <type fullname="System.StubHelpers.MngdNativeArrayMarshaler" preserve="all" />
+  </assembly>
+</linker>

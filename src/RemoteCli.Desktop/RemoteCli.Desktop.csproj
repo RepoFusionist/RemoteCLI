@@ -17,7 +17,10 @@
     <EmbeddedResource Include="UI\vendor\xterm.js" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.js" />
     <EmbeddedResource Include="UI\vendor\xterm.css" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.css" />
     <EmbeddedResource Include="UI\vendor\addon-serialize.js" LogicalName="RemoteCli.Desktop.UI.vendor.addon-serialize.js" />
-    <None Update="UI\vendor\xterm.LICENSE" CopyToPublishDirectory="PreserveNewest" TargetPath="ThirdPartyNotices\xterm.LICENSE" />
+    <!-- Third-party license texts ship next to the executable (single-file publish copies
+         content items outside the bundle). xterm.js and addon-serialize share one MIT text. -->
+    <None Include="..\..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\ThirdPartyNotices\**\*" LinkBase="ThirdPartyNotices" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Assets\longshell-icon.ico" LogicalName="RemoteCli.Desktop.Assets.longshell-icon.ico" />
   </ItemGroup>
 
@@ -36,6 +39,40 @@
     <!-- 单文件发布时把 WebView2 原生加载器内嵌，避免依赖解压出的 WebView2Loader.dll -->
     <WebView2LoaderPreference>Embed</WebView2LoaderPreference>
   </PropertyGroup>
+
+  <!-- Keep WinForms and WebView2 publish trimming scoped to the supported partial mode. -->
+  <PropertyGroup>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <!-- WinForms currently rejects trimming at SDK validation; revisit after SDK upgrades. -->
+    <_SuppressWinFormsTrimError>true</_SuppressWinFormsTrimError>
+    <!-- WebView2 uses classic COM interop at runtime. -->
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
+    <!-- Protocol/MCP serialization still uses reflection-based JsonSerializer overloads. -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- Keep linker diagnostics visible without failing the publish; review warnings on SDK changes. -->
+    <ILLinkTreatWarningsAsErrors>false</ILLinkTreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <TrimmerRootAssembly Include="System.Windows.Forms" />
+    <TrimmerRootAssembly Include="System.Windows.Forms.Primitives" />
+    <TrimmerRootAssembly Include="System.Private.Windows.Core" />
+    <TrimmerRootAssembly Include="System.Drawing.Common" />
+    <TrimmerRootAssembly Include="System.Drawing.Primitives" />
+    <TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
+    <TrimmerRootAssembly Include="Microsoft.Web.WebView2.WinForms" />
+    <TrimmerRootDescriptor Include="roots.xml" />
+  </ItemGroup>
+
+  <!-- These debugger and design-time files are not needed at runtime in the bundled app. -->
+  <Target Name="DropOptionalAssets" AfterTargets="_ComputeFilesToBundle">
+    <ItemGroup>
+      <_FilesToBundle Remove="@(_FilesToBundle)"
+                      Condition="$([System.String]::Copy('%(Filename)').StartsWith('mscordac')) Or '%(Filename)' == 'mscordbi' Or '%(Filename)' == 'Microsoft.DiaSymReader.Native.amd64' Or '%(Filename)' == 'System.Windows.Forms.Design'" />
+    </ItemGroup>
+  </Target>
 
   <Target Name="RemoveReferencedExecutableRuntimeConfigFiles" AfterTargets="Publish">
     <Delete Files="$(PublishDir)RemoteCli.Local.runtimeconfig.json;$(PublishDir)RemoteCli.Remote.runtimeconfig.json" />

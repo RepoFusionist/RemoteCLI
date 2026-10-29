@@ -21,6 +21,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Compile Include="..\..\src\RemoteCli.Desktop\LocalChatTools.cs" Link="LocalChatTools.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\ExternalPathLauncher.cs" Link="ExternalPathLauncher.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\ComposerModePolicy.cs" Link="ComposerModePolicy.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\PublicWebFetch.cs" Link="PublicWebFetch.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayCommandSession.cs" Link="GatewayCommandSession.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayRemoteTools.cs" Link="GatewayRemoteTools.cs" />
@@ -28,9 +30,17 @@
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayExaSearch.cs" Link="GatewayExaSearch.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayImages.cs" Link="GatewayImages.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayTokenEstimate.cs" Link="GatewayTokenEstimate.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\TokenPrediction\*.cs" Link="TokenPrediction\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayUsage.cs" Link="GatewayUsage.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayModelOptions.cs" Link="GatewayModelOptions.cs" />
-    <Compile Include="..\..\src\RemoteCli.Desktop\WorkspaceCheckpoints.cs" Link="WorkspaceCheckpoints.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\WorkspaceWorktrees.cs" Link="WorkspaceWorktrees.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\WorktreeChangeGuard.cs" Link="WorktreeChangeGuard.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\PlanStore.cs" Link="PlanStore.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\ContextCompression.cs" Link="ContextCompression.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayHistory.cs" Link="GatewayHistory.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\ContextIndexStore.cs" Link="ContextIndexStore.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewayApprovalPolicy.cs" Link="GatewayApprovalPolicy.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\GatewaySystemPrompt.cs" Link="GatewaySystemPrompt.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewaySubagents.cs" Link="GatewaySubagents.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayMcpPlugins.cs" Link="GatewayMcpPlugins.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\GatewayTerminalPool.cs" Link="GatewayTerminalPool.cs" />
@@ -39,7 +49,12 @@
     <Compile Include="..\..\src\RemoteCli.Desktop\DocumentPreview.cs" Link="DocumentPreview.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\OfficeKitPreview.cs" Link="OfficeKitPreview.cs" />
     <Compile Include="..\..\src\RemoteCli.Desktop\OfficeKitAssets.cs" Link="OfficeKitAssets.cs" />
-    <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\Assets\libreoffice-kit-win32-x64-0.1.2.tgz" LogicalName="RemoteCli.Desktop.Assets.libreoffice-kit-win32-x64-0.1.2.tgz" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\UiPluginPackages.cs" Link="UiPluginPackages.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\TextPreviewPages.cs" Link="TextPreviewPages.cs" />
+    <Compile Include="..\..\src\RemoteCli.Desktop\BrowserAddress.cs" Link="BrowserAddress.cs" />
+    <!-- The LibreOffice preview kit is an optional upstream runtime download. Its license does
+         not allow this repository to redistribute the archive, so it is not embedded here.
+         Set REMOTECLI_OFFICEKIT_PACKAGE to a local copy to run the real conversion test. -->
     <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\UI\vendor\xterm.js" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.js" />
     <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\UI\vendor\xterm.css" LogicalName="RemoteCli.Desktop.UI.vendor.xterm.css" />
     <EmbeddedResource Include="..\..\src\RemoteCli.Desktop\UI\vendor\addon-serialize.js" LogicalName="RemoteCli.Desktop.UI.vendor.addon-serialize.js" />

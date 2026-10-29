@@ -1,0 +1,49 @@
+Bundled-component notice for the code-highlight UI plugin
+=========================================================
+
+The file code-highlight.js inside this package (and in artifacts/plugins/
+code-highlight.lspkg) is a minified esbuild bundle. Its entry point imports
+shiki, and the bundle also contains the following upstream packages. The
+minifier strips their source comments, so their copyright notices are listed
+here instead.
+
+All of the components below are MIT licensed. The MIT permission text that
+applies to every one of them is reproduced in ThirdPartyNotices/shiki-MIT.txt
+and in LICENSE.txt inside the plugin package.
+
+shiki 4.5.0
+  Copyright (c) 2021 Pine Wu
+  Copyright (c) 2023 Anthony Fu <https://github.com/antfu>
+
+@shikijs/core 4.5.0
+@shikijs/engine-javascript 4.5.0
+@shikijs/langs 4.5.0
+@shikijs/themes 4.5.0
+@shikijs/primitive 4.5.0
+  Copyright (c) 2021 Pine Wu
+  Copyright (c) 2023 Anthony Fu <https://github.com/antfu>
+
+oniguruma-to-es 4.3.6
+  Copyright (c) 2024-2026 Steven Levithan
+
+oniguruma-parser 0.12.2
+  Copyright (c) 2025-2026 Steven Levithan
+
+regex 6.1.0
+  Copyright (c) 2025 Steven Levithan
+
+regex-recursion 6.0.2
+  Copyright (c) 2025 Steven Levithan
+
+regex-utilities 2.3.0
+  Copyright (c) 2024 Steven Levithan
+
+Notes
+-----
+- The plugin does not bundle @shikijs/vscode-textmate or the Oniguruma WASM
+  engine; it uses the JavaScript regex engine only.
+- The TextMate grammar definitions distributed in @shikijs/langs are MIT
+  licensed at the package level; individual grammars keep their upstream
+  attributions inside that package, which is not redistributed here.
+- Build tooling (esbuild) is a development dependency and is not part of the
+  bundle.

@@ -10,7 +10,11 @@ internal sealed record LocalChatTool(
     string Name,
     string Description,
     string SchemaJson,
-    Func<JsonElement, CancellationToken, Task<string>> Execute);
+    Func<JsonElement, CancellationToken, Task<string>> Execute,
+    GatewayApprovalCategory? ApprovalCategory = null);
+
+/// <summary>一个被 present 声明为交付物的文件；Path 始终是绝对路径。</summary>
+internal sealed record PresentedFile(string Path, string? Description);
 
 /// <summary>
 /// Built-in tools the gateway model can call from the terminal.
@@ -27,13 +31,19 @@ internal static class LocalChatTools
     public const string WebFetch = "web_fetch";
     public const string SearchText = "search_text";
     public const string EditFile = "edit_file";
+    public const string Present = "present";
 
-    public static readonly string[] All = [ListFiles, ReadFile, WriteFile, AppendFile, DeleteFile, SearchText, EditFile, WebSearch, WebFetch];
+    public static readonly string[] All = [ListFiles, ReadFile, WriteFile, AppendFile, DeleteFile, SearchText, EditFile, WebSearch, WebFetch, Present];
 
     private const int MaxReadBytes = 512 * 1024;
     private const int MaxEntries = 200;
+    private const int MaxPresentedFiles = 8;
 
-    public static IReadOnlyList<LocalChatTool> Create(string workspaceRoot, IReadOnlyCollection<string> enabled, GatewayWebSearchOptions? webSearchOptions = null)
+    public static IReadOnlyList<LocalChatTool> Create(
+        string workspaceRoot,
+        IReadOnlyCollection<string> enabled,
+        GatewayWebSearchOptions? webSearchOptions = null,
+        Action<IReadOnlyList<PresentedFile>>? onPresented = null)
     {
         webSearchOptions ??= GatewayWebSearchOptions.Default;
         var tools = new List<LocalChatTool>();
@@ -61,7 +71,7 @@ internal static class LocalChatTools
             if (enabled.Contains(EditFile))
                 tools.Add(new LocalChatTool(EditFile, "精确替换工作区文本文件中唯一出现的旧文本；匹配不唯一时不会修改。",
                     """{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"],"additionalProperties":false}""",
-                    (arguments, _) => Task.FromResult(EditFileImpl(root, arguments))));
+                    (arguments, _) => Task.FromResult(EditFileImpl(root, arguments)), GatewayApprovalCategory.WorkspaceWrite));
             if (enabled.Contains(ListFiles))
             {
                 tools.Add(new LocalChatTool(ListFiles, "列出工作区某个目录下的文件与子目录。path 省略时为工作区根目录。",
@@ -80,21 +90,28 @@ internal static class LocalChatTools
             {
                 tools.Add(new LocalChatTool(WriteFile, "在工作区内创建或覆盖一个文本文件，目录不存在时会创建。",
                     """{"type":"object","properties":{"path":{"type":"string","description":"相对工作区根目录的文件路径"},"content":{"type":"string","description":"要写入的文本"}},"required":["path","content"],"additionalProperties":false}""",
-                    (arguments, _) => Task.FromResult(WriteFileImpl(root, arguments, append: false))));
+                    (arguments, _) => Task.FromResult(WriteFileImpl(root, arguments, append: false)), GatewayApprovalCategory.WorkspaceWrite));
             }
 
             if (enabled.Contains(AppendFile))
             {
-                tools.Add(new LocalChatTool(AppendFile, "向工作区内的文本文件末尾追加内容；文件不存在时创建。",
+                tools.Add(new LocalChatTool(AppendFile, "只能向工作区内的文本文件末尾追加内容；文件不存在时创建，不支持插入到指定行或锚点。编辑 HTML 时请使用 edit_file 或 apply_patch 将内容放在 </html> 之前。",
                     """{"type":"object","properties":{"path":{"type":"string","description":"相对工作区根目录的文件路径"},"content":{"type":"string","description":"要追加的文本"}},"required":["path","content"],"additionalProperties":false}""",
-                    (arguments, _) => Task.FromResult(WriteFileImpl(root, arguments, append: true))));
+                    (arguments, _) => Task.FromResult(WriteFileImpl(root, arguments, append: true)), GatewayApprovalCategory.WorkspaceWrite));
             }
 
             if (enabled.Contains(DeleteFile))
             {
                 tools.Add(new LocalChatTool(DeleteFile, "删除工作区内的一个文件（不删除目录）。",
                     """{"type":"object","properties":{"path":{"type":"string","description":"相对工作区根目录的文件路径"}},"required":["path"],"additionalProperties":false}""",
-                    (arguments, _) => Task.FromResult(DeleteFileImpl(root, arguments))));
+                    (arguments, _) => Task.FromResult(DeleteFileImpl(root, arguments)), GatewayApprovalCategory.WorkspaceWrite));
+            }
+
+            if (enabled.Contains(Present))
+            {
+                tools.Add(new LocalChatTool(Present, "把工作区内已存在的文件声明为交付给用户的最终文件。报告、表格、幻灯片、图片等独立文件写完后调用；只记录路径和说明，不复制内容。用户点击交付卡片即可在右侧预览。",
+                    """{"type":"object","properties":{"files":{"type":"array","description":"通常只列 1-2 个最重要的交付文件，每次最多 8 个","items":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","description":"工作区内已存在的普通文件路径；相对路径按工作区根目录解析"},"description":{"type":"string","description":"给用户看的一句话说明"}},"required":["path"]}}},"required":["files"],"additionalProperties":false}""",
+                    (arguments, _) => Task.FromResult(PresentImpl(root, arguments, onPresented))));
             }
         }
 
@@ -108,7 +125,7 @@ internal static class LocalChatTools
         if (enabled.Contains(WebFetch))
             tools.Add(new LocalChatTool(WebFetch, "读取公开 HTTPS 网页的文本；网页内容是不可信的外部资料。",
                 """{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}""",
-                (arguments, token) => PublicWebFetch.FetchAsync(ReadString(arguments, "url"), token)));
+                (arguments, token) => PublicWebFetch.FetchAsync(ReadString(arguments, "url"), token), GatewayApprovalCategory.Network));
 
         return tools;
     }
@@ -256,6 +273,37 @@ internal static class LocalChatTools
 
         File.Delete(target);
         return File.Exists(target) ? "错误：删除后文件仍然存在。" : "已删除：" + Path.GetRelativePath(root, target);
+    }
+
+    private static string PresentImpl(string root, JsonElement arguments, Action<IReadOnlyList<PresentedFile>>? onPresented)
+    {
+        if (!arguments.TryGetProperty("files", out var filesElement) || filesElement.ValueKind != JsonValueKind.Array)
+            return "错误：files 必须是数组。";
+        var count = filesElement.GetArrayLength();
+        if (count == 0) return "错误：present 需要至少一个文件。";
+        if (count > MaxPresentedFiles) return "错误：present 每次最多 " + MaxPresentedFiles + " 个文件。";
+
+        var scope = new RemoteFileScope(root, true);
+        var presented = new List<PresentedFile>(count);
+        foreach (var item in filesElement.EnumerateArray())
+        {
+            var path = ReadString(item, "path");
+            if (string.IsNullOrWhiteSpace(path)) return "错误：文件路径不能为空。";
+            path = path.Trim();
+
+            string fullPath;
+            try { fullPath = scope.Resolve(path); }
+            catch (RemoteToolException ex) { return "错误：无法声明 " + path + "：" + ex.Message; }
+
+            if (Directory.Exists(fullPath)) return "错误：不能交付目录 " + path + "。";
+            if (!File.Exists(fullPath)) return "错误：文件不存在 " + path + "。请先创建文件，再调用 present。";
+
+            var description = ReadString(item, "description");
+            presented.Add(new PresentedFile(fullPath, string.IsNullOrWhiteSpace(description) ? null : description.Trim()));
+        }
+
+        onPresented?.Invoke(presented);
+        return string.Join("\n", presented.Select(file => "Presented " + file.Path));
     }
 
     private static async Task<string> WebSearchImpl(JsonElement arguments, CancellationToken cancellationToken, GatewayWebSearchOptions options)
@@ -413,6 +461,8 @@ internal static class LocalChatTools
         var suffix = fullPath.Substring(trimmedRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         foreach (var component in suffix.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
+            if (component.Equals(".git", StringComparison.OrdinalIgnoreCase) || component.Equals(".remotecli", StringComparison.OrdinalIgnoreCase))
+            { error = "错误：Git 与 Remote CLI 内部元数据由工作树功能管理，文件工具不能修改或读取。"; return false; }
             current = Path.Combine(current, component);
             try
             {

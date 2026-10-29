@@ -22,3 +22,59 @@ AGENTS.md
 
 # Local UI backups can contain machine-specific state.
 src/RemoteCli.Desktop/UI/*.bak-*
+
+# Optional LibreOffice preview kit (MPL-2.0 with LGPL/GPL components).
+# The upstream archive must never be committed or redistributed by this repository;
+# the desktop app downloads and verifies it from the upstream npm registry on first use.
+# A local copy may be kept for tests and pointed to by REMOTECLI_OFFICEKIT_PACKAGE.
+src/RemoteCli.Desktop/Assets/libreoffice-kit-win32-x64-*.tgz
+
+# Local knowledge, reviews, prototypes, and editor state.
+docs/knowledge-base/
+docs/handover*.md
+docs/*assessment.md
+docs/licensing-review.md
+algorithm-evaluation/
+design/*-preview.html
+.vs/
+.vscode/
+.idea/
+.codex/
+.agents/
+.aws/
+.azure/
+
+# Logs, test results, runtime state, and generated packages.
+**/logs/
+**/TestResults/
+*.log
+*.trx
+*.dmp
+*.etl
+*.exe
+*.dll
+*.pdb
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.nupkg
+*.msi
+*.rcplugin
+*.lspkg
+
+# Private credentials and local configuration; keep sanitized examples usable.
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.pfx
+*.p12
+Key.txt
+auth.json
+credentials.json
+secrets.json
+*.local.json

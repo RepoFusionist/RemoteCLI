@@ -3,8 +3,11 @@ using System.Text.Json;
 
 namespace RemoteCli.Desktop;
 
+internal sealed record GatewaySubagentUpdate(string AgentId, string Task, string Status, string? Result, string? Error);
+
 /// <summary>Owns independent child model tasks for exactly one parent request.</summary>
-internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<string>> run, CancellationToken parentToken) : IAsyncDisposable
+internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<string>> run, CancellationToken parentToken,
+    Action<GatewaySubagentUpdate>? onUpdate = null) : IAsyncDisposable
 {
     private const int MaximumAgents = 8;
     private readonly SemaphoreSlim _concurrency = new(3, 3);
@@ -15,8 +18,8 @@ internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<stri
     [
         new("spawn_agent", "启动独立子代理处理一个明确任务；返回 agent_id，使用 wait_agent 获取结果。子代理只使用允许的只读工具，不会继承对话历史。",
             """{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false}""", SpawnAsync),
-        new("wait_agent", "等待本次请求创建的子代理；running 表示仍在执行，completed 返回结果。",
-            """{"type":"object","properties":{"agent_id":{"type":"string"},"wait_ms":{"type":"integer"}},"required":["agent_id"],"additionalProperties":false}""", WaitAsync),
+        new("wait_agent", "等待本次请求创建的子代理；running 表示仍在执行，completed 返回结果。wait_ms 为等待毫秒数，范围 0–20000，省略时默认为 10000。",
+            """{"type":"object","properties":{"agent_id":{"type":"string"},"wait_ms":{"type":"integer","description":"等待毫秒数，范围 0–20000；省略时默认为 10000"}},"required":["agent_id"],"additionalProperties":false}""", WaitAsync),
         new("cancel_agent", "取消本次请求创建的子代理。",
             """{"type":"object","properties":{"agent_id":{"type":"string"}},"required":["agent_id"],"additionalProperties":false}""", CancelAsync)
     ];
@@ -29,9 +32,11 @@ internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<stri
         if (Volatile.Read(ref _disposed) != 0 || parentToken.IsCancellationRequested) return Task.FromResult("错误：父请求已结束。");
         if (_agents.Count >= MaximumAgents || !_concurrency.Wait(0)) return Task.FromResult("错误：子代理数量已达上限；请等待已有子代理结束。");
         var id = Guid.NewGuid().ToString("N");
-        var agent = new Agent(CancellationTokenSource.CreateLinkedTokenSource(parentToken));
+        var agent = new Agent(CancellationTokenSource.CreateLinkedTokenSource(parentToken), task);
+        agent.Id = id;
         agent.Stop.CancelAfter(TimeSpan.FromMinutes(2));
         if (!_agents.TryAdd(id, agent)) { agent.Stop.Dispose(); _concurrency.Release(); return Task.FromResult("错误：无法创建子代理。"); }
+        Publish(agent, "running", null, null);
         agent.Work = Task.Run(() => ExecuteAsync(agent, task), CancellationToken.None);
         return Task.FromResult(JsonSerializer.Serialize(new { agent_id = id, status = "running" }));
     }
@@ -47,7 +52,12 @@ internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<stri
         }
         catch (OperationCanceledException) { agent.Result = new AgentResult("cancelled", null, "子代理已取消或超过两分钟期限。"); }
         catch (Exception exception) { agent.Result = new AgentResult("failed", null, "子代理执行失败（" + exception.GetType().Name + "）。"); }
-        finally { _concurrency.Release(); }
+        finally
+        {
+            var result = agent.Result ?? new AgentResult("failed", null, "子代理没有返回结果。");
+            Publish(agent, result.Status, result.Output, result.Error);
+            _concurrency.Release();
+        }
     }
 
     private async Task<string> WaitAsync(JsonElement args, CancellationToken token)
@@ -67,7 +77,11 @@ internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<stri
         token.ThrowIfCancellationRequested();
         if (!_agents.TryGetValue(ReadString(args, "agent_id"), out var agent)) return Task.FromResult("错误：子代理不存在或不属于本次请求。");
         var requested = !agent.Work.IsCompleted;
-        if (requested) agent.Stop.Cancel();
+        if (requested)
+        {
+            agent.Stop.Cancel();
+            Publish(agent, "cancelling", null, null);
+        }
         return Task.FromResult(JsonSerializer.Serialize(new { agent_id = ReadString(args, "agent_id"), cancellation_requested = requested }));
     }
 
@@ -83,11 +97,19 @@ internal sealed class GatewaySubagents(Func<string, CancellationToken, Task<stri
     }
 
     private static string ReadString(JsonElement item, string name) => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
-    private sealed record AgentResult(string Status, string? Output, string? Error);
-    private sealed class Agent(CancellationTokenSource stop)
+    private void Publish(Agent agent, string status, string? result, string? error)
     {
+        try { onUpdate?.Invoke(new GatewaySubagentUpdate(agent.Id, agent.TaskText, status, result, error)); }
+        catch { /* UI tracing must never change the child task result. */ }
+    }
+
+    private sealed record AgentResult(string Status, string? Output, string? Error);
+    private sealed class Agent(CancellationTokenSource stop, string task)
+    {
+        internal string Id { get; set; } = "";
+        internal string TaskText { get; } = task;
         internal CancellationTokenSource Stop { get; } = stop;
-        internal Task Work { get; set; } = Task.CompletedTask;
+        internal Task Work { get; set; } = System.Threading.Tasks.Task.CompletedTask;
         internal AgentResult? Result { get; set; }
     }
 }

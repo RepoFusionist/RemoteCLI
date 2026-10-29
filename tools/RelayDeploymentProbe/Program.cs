@@ -26,6 +26,7 @@ var holdSeconds = args.Length == 2 ? int.Parse(args[1]) : 0;
 if (holdSeconds is < 0 or > 30) throw new ArgumentOutOfRangeException(nameof(holdSeconds));
 
 using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+client.DefaultRequestHeaders.TryAddWithoutValidation(RelayClientIdentity.HeaderName, RelayClientIdentity.HeaderValue);
 foreach (var mode in new[] { ConnectionCredentialMode.RotatingRandomPassword, ConnectionCredentialMode.FixedPassword })
 {
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(100));
@@ -56,7 +57,12 @@ foreach (var mode in new[] { ConnectionCredentialMode.RotatingRandomPassword, Co
             Scheme = "wss", Query = "role=remote"
         }.Uri;
         using var remoteSocket = await WebSocketConnectHelper.ConnectClientWithRetryAsync(
-            static () => new ClientWebSocket(), remoteUri, token, maximumAttempts: 1);
+            static () =>
+            {
+                var socket = new ClientWebSocket();
+                socket.Options.SetRequestHeader(RelayClientIdentity.HeaderName, RelayClientIdentity.HeaderValue);
+                return socket;
+            }, remoteUri, token, maximumAttempts: 1);
         Console.WriteLine($"MODE={mode} REMOTE_WSS_HTTP={(int)remoteSocket.HttpStatusCode}");
         var command = Encoding.UTF8.GetBytes("synthetic-encrypted-command-" + Guid.NewGuid().ToString("N"));
         var result = Encoding.UTF8.GetBytes("synthetic-encrypted-result-" + Guid.NewGuid().ToString("N"));

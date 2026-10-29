@@ -50,6 +50,51 @@ public sealed class CodexExecModelProviderTests
             setting.Contains("mutating tools", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void CreateStartInfoCarriesSelectedModelAndReasoningEffort()
+    {
+        var startInfo = CodexExecModelProvider.CreateStartInfo(
+            "codex.exe",
+            Path.GetTempPath(),
+            "gpt-6.1-sol",
+            "xhigh");
+        var arguments = startInfo.ArgumentList.ToArray();
+
+        var modelIndex = Array.IndexOf(arguments, "--model");
+        Assert.True(modelIndex >= 0);
+        Assert.Equal("gpt-6.1-sol", arguments[modelIndex + 1]);
+        Assert.Contains("model_reasoning_effort=\"xhigh\"", arguments);
+    }
+
+    [Fact]
+    public void ModelCatalogKeepsOnlyListedModelsAndSupportedReasoningEfforts()
+    {
+        var catalog = CodexExecModelProvider.LoadModelCatalogForTests(
+            "C:\\codex",
+            "model = \"gpt-6.1-sol\"\nmodel_reasoning_effort = \"high\"\n",
+            """
+            {
+              "models": [
+                {
+                  "slug": "gpt-6.1-sol",
+                  "display_name": "GPT-6.1 Sol",
+                  "visibility": "list",
+                  "supported_in_api": true,
+                  "default_reasoning_level": "medium",
+                  "supported_reasoning_levels": [{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"unsafe"}]
+                },
+                {"slug":"hidden-model","visibility":"hidden"}
+              ]
+            }
+            """);
+
+        Assert.True(catalog.Success);
+        var model = Assert.Single(catalog.Models);
+        Assert.Equal("gpt-6.1-sol", model.Id);
+        Assert.Equal(["low", "medium", "high"], model.ReasoningEfforts);
+        Assert.Equal("high", catalog.DefaultReasoningEffort);
+    }
+
     [Theory]
     [InlineData("MCP server failed to initialize", "codex_mcp_unavailable")]
     [InlineData("MCP startup timed out", "codex_mcp_unavailable")]

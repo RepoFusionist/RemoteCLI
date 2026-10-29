@@ -296,20 +296,13 @@ try {
     finally { $archive.Dispose() }
     Write-Output "Compressed package verified: $packagePath"
 
-    # Keep the core single-file CLI small. The Office renderer is an optional sidecar that can
-    # be copied beside the EXE (or downloaded lazily on the first Office preview).
-    $officePackage = Join-Path $repoRoot 'src\RemoteCli.Desktop\Assets\libreoffice-kit-win32-x64-0.1.2.tgz'
-    if (-not (Test-Path -LiteralPath $officePackage -PathType Leaf)) {
-        throw "Office preview package is missing: $officePackage"
-    }
-    $optionalDirectory = Join-Path $repoRoot ("artifacts\optional\RemoteCli.OfficeKit-win-x64-$VersionSuffix")
-    if (Test-Path -LiteralPath $optionalDirectory) {
-        throw "Refusing to overwrite an existing optional package: $optionalDirectory"
-    }
-    New-Item -ItemType Directory -Path $optionalDirectory -Force | Out-Null
-    $optionalZip = Join-Path $optionalDirectory 'OfficeKit\libreoffice-kit-win32-x64-0.1.2.tgz.zip'
-    New-Item -ItemType Directory -Path (Split-Path -Parent $optionalZip) -Force | Out-Null
-    Compress-Archive -LiteralPath $officePackage -DestinationPath $optionalZip -CompressionLevel Optimal
+    # The Office preview kit (@deepseek-ai/libreoffice-kit-win32-x64 0.1.2) is an optional
+    # third-party runtime download owned by its upstream npm package (MPL-2.0 plus LGPL/GPL
+    # LibreOffice components). It is intentionally NOT packaged or redistributed by this
+    # deployment; the desktop app downloads and verifies it on first Office preview.
+    # The archive must never be committed to git or pushed to a remote repository: doing so
+    # would make this project the redistributor. A local copy is for tests only and is
+    # ignored by .gitignore; point REMOTECLI_OFFICEKIT_PACKAGE at it if needed.
 
     # Codex CLI is not always on the PATH of the deployment session. Prefer PATH, then fall back
     # to the path Remote CLI already validated, the Codex desktop config, and the default install
@@ -337,9 +330,9 @@ try {
         zipPackageSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
         zipSizeBytes = (Get-Item -LiteralPath $packagePath).Length
         productVersion = (Get-Item -LiteralPath $publishedExecutable).VersionInfo.ProductVersion
-        officeKitPackage = $optionalZip
-                            officeKitPackageSha256 = (Get-FileHash -LiteralPath $optionalZip -Algorithm SHA256).Hash
-                            officeKitSourceSha256 = (Get-FileHash -LiteralPath $officePackage -Algorithm SHA256).Hash
+        officeKitPackage = $null
+        officeKitPackageSha256 = $null
+        officeKitSourceSha256 = $null
         mcpRegistration = 'remotecli'
         packagedMcpTest = 'PASS'
     }

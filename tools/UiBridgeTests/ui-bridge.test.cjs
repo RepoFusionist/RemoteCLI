@@ -79,6 +79,43 @@ test("host initialization gates connection and keeps the NewServer default", t =
   assert.equal(ui.query("#pairBtn").disabled, false);
 });
 
+test("startup splash draws the product name and the greeting has no decorative marker", t => {
+  const ui = page(t);
+  assert.equal(ui.document.querySelectorAll("#bootSplash .boot-splash__letter").length, 9);
+  assert.equal(ui.document.querySelector(".terminal__greet .mark"), null);
+  assert.match(ui.query(".approval-menu__warning").textContent, /完全访问权限只适用于自定义网关\s+远程设备仍受远程会话授权保护/);
+});
+
+test("startup letters draw together and land on the title within three seconds", async t => {
+  const { chromium } = require("playwright-core");
+  const { pathToFileURL } = require("node:url");
+  const browser = await chromium.launch({ executablePath: process.env.REMOTECLI_TEST_BROWSER || "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", headless: true });
+  t.after(async () => browser.close());
+  const browserPage = await browser.newPage({ viewport: { width: 1100, height: 760 }, reducedMotion: "no-preference" });
+  await browserPage.goto(pathToFileURL(path.join(repo, "src/RemoteCli.Desktop/UI/longshell-ui.html")).href);
+  const result = await browserPage.evaluate(() => {
+    const logo = document.querySelector(".boot-splash__logo"), brand = document.querySelector("#pageBrand");
+    const letters = [...logo.querySelectorAll(".boot-splash__letter")];
+    const animations = letters.map(letter => letter.querySelector(".boot-splash__stroke").getAnimations()[0]);
+    const timings = animations.map(animation => animation.effect.getComputedTiming());
+    const colors = letters.map(letter => getComputedStyle(letter.querySelector(".boot-splash__stroke")).stroke);
+    const dock = logo.getAnimations().find(animation => animation.animationName === "boot-splash-dock");
+    dock.pause(); dock.currentTime = 1800;
+    const target = brand.getBoundingClientRect(), actual = logo.getBoundingClientRect();
+    return { timings:timings.map(timing => ({ delay:timing.delay, duration:timing.duration })), colors,
+      logoFont:getComputedStyle(logo).fontFamily, brandFont:getComputedStyle(brand).fontFamily,
+      target:{ x:target.x, y:target.y, width:target.width, height:target.height },
+      actual:{ x:actual.x, y:actual.y, width:actual.width, height:actual.height },
+      total:document.querySelector(".app").getAnimations()[0].effect.getComputedTiming().endTime };
+  });
+  assert.equal(result.timings.length, 9);
+  assert.ok(result.timings.every(timing => timing.delay === result.timings[0].delay && timing.duration === result.timings[0].duration));
+  assert.equal(new Set(result.colors).size, 1);
+  assert.equal(result.logoFont, result.brandFont, "splash uses the same font family as the title");
+  for (const key of ["x", "y", "width", "height"]) assert.ok(Math.abs(result.actual[key] - result.target[key]) < 2, `${key}: ${JSON.stringify(result)}`);
+  assert.ok(result.total >= 2000 && result.total <= 3000);
+});
+
 test("Codex CLI controls request auto-find, native browse, and saved path", t => {
   const ui = page(t);
   ui.receive({ type: "codex-cli-status", path: "", found: false, message: "未找到 Codex CLI。" });
@@ -125,7 +162,7 @@ test("connect click submits credentials exactly once to the host", t => {
   ui.query("#pairBtn").click();
   ui.query("#pairBtn").click();
   assert.deepEqual(ui.messages.filter(message => message.type === "join"), [{
-    type: "join", identity: "Test controller", relay: relayBaseUrl,
+    type: "join", identity: "Test controller", relay: relayBaseUrl, expectedFingerprint: "",
     userName: "remote-user", secret: "  fixed password stays exact  ", allowControllerModel: false
   }]);
   assert.match(ui.query("#localStatus").textContent, /正在连接/);
@@ -139,11 +176,23 @@ test("controller Codex consent is included in the connection request after the r
   const ui = page(t);
   fillConnection(ui);
   ui.query("#allowControllerModelConsent").click();
+  ui.receive({
+    type: "controller-model-catalog",
+    forGrant: true,
+    success: true,
+    defaultModel: "gpt-6.1-sol",
+    defaultReasoningEffort: "medium",
+    models: [
+      { id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+      { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" }
+    ]
+  });
   ui.query("#pairBtn").click();
 
   assert.deepEqual(ui.messages.filter(message => message.type === "join"), [{
-    type: "join", identity: "Test controller", relay: relayBaseUrl,
-    userName: "remote-user", secret: "  fixed password stays exact  ", allowControllerModel: true
+    type: "join", identity: "Test controller", relay: relayBaseUrl, expectedFingerprint: "",
+    userName: "remote-user", secret: "  fixed password stays exact  ", allowControllerModel: true,
+    controllerModelIds: ["gpt-6.1-sol", "gpt-5.6-luna"], controllerModelMaxEffort: "high"
   }]);
   assert.equal(ui.confirmMessages.length, 1);
 });
@@ -204,7 +253,7 @@ test("failed local Codex response renders an error in the terminal, clears busy 
   ui.query("#terminalInput").value = "Use the configured MCP";
   ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
   ui.query("#terminalSendBtn").click();
-  assert.deepEqual(ui.messages.at(-1), { type: "local-controller-model-request", prompt: "Use the configured MCP", workspaceRoot:"C:////Work////Alpha" });
+  assert.deepEqual(ui.messages.at(-1), { type: "local-controller-model-request", prompt: "Use the configured MCP", model:"", reasoningEffort:"high", workspaceRoot:"C:////Work////Alpha" });
 
   ui.receive({ type: "local-controller-model-started", requestId: "request-1", prompt: "Use the configured MCP" });
   assert.equal(ui.query("#terminalSendBtn").getAttribute("aria-label"), "停止");
@@ -236,7 +285,7 @@ test("terminal view requires a workspace and persists conversations through the 
   ui.query("#terminalInput").value = "帮我看看服务器状态";
   ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
   ui.query("#terminalSendBtn").click();
-  assert.deepEqual(ui.messages.at(-1), { type: "local-controller-model-request", prompt: "帮我看看服务器状态", workspaceRoot:"C:////Work////Alpha" });
+  assert.deepEqual(ui.messages.at(-1), { type: "local-controller-model-request", prompt: "帮我看看服务器状态", model:"", reasoningEffort:"high", workspaceRoot:"C:////Work////Alpha" });
   ui.receive({ type: "local-controller-model-started", requestId: "request-1", prompt: "帮我看看服务器状态" });
 
   const saved = ui.messages.filter(message => message.type === "save-state").at(-1);
@@ -329,6 +378,24 @@ test("account window configures gateway credentials, models, and effort", t => {
   assert.match(ui.query("#terminalThread").textContent, /pong/);
 });
 
+test("interface language switches, translates settings, and persists", t => {
+  const ui = page(t);
+  ui.query("#accountBtn").click();
+  ui.query("#languageSelect").value = "en-US";
+  ui.query("#settingsSaveBtn").click();
+
+  assert.equal(ui.document.documentElement.lang, "en-US");
+  assert.equal(ui.query(".settings-window__title").textContent, "Settings");
+  assert.equal(ui.query('[data-settings-pane="general"]').textContent.trim(), "General");
+  assert.equal(ui.query("#languageSelect").value, "en-US");
+  const saved = ui.messages.filter(message => message.type === "save-state").at(-1);
+  assert.equal(saved.state.settings.language, "en-US");
+
+  ui.receive({ type:"ui-state", state:{ settings:{ language:"zh-CN" } } });
+  assert.equal(ui.document.documentElement.lang, "zh-CN");
+  assert.equal(ui.query(".settings-window__title").textContent, "设置");
+});
+
 test("composer chips show only the workspace name and the approval menu uses the product name", t => {
   const ui = page(t);
   ui.receive({ type:"ui-state", state:baseState({ activeConversationId:"c1" }) });
@@ -348,6 +415,99 @@ test("composer options use line icons", t => {
   assert.doesNotMatch(ui.query("#composerQaBtn").textContent, /✦/);
 });
 
+test("composer modes are exclusive and Q&A sends read-only tools only", t => {
+  const ui = page(t);
+  ui.receive({ type:"ui-state", state:baseState({
+    activeConversationId:"c1",
+    settings:{ relay:relayBaseUrl, replySource:"gateway", gatewayUrl:"https://gateway.example/v1",
+      gatewayApiKey:"key", models:["model"], defaultModel:"model",
+      globalTools:["list_files","read_file","write_file","apply_patch","web_search","web_fetch"] },
+    composer:{ mode:"default", plan:false, target:"stale goal text" }
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+  assert.equal(ui.query("#composerModeAnnotation").hidden, true, "the default tool-calling mode does not take up space in the composer");
+  assert.equal(ui.document.querySelector("#composerToolModeBtn"), null, "the implicit default is not listed as a mode choice");
+  assert.equal(ui.document.querySelectorAll(".turn__mode").item(0).hidden, true, "default conversation turns have no mode badge");
+
+  ui.query("#composerPlanBtn").click();
+  assert.equal(ui.query("#composerPlanBtn").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.query("#composerQaBtn").getAttribute("aria-pressed"), "false");
+  assert.equal(ui.query("#composerModeLabel").textContent, "计划");
+  assert.equal(ui.query("#composerModeAnnotation").hidden, false);
+  assert.equal(ui.query("#composerModeAnnotation").parentElement.classList.contains("composer__toolbar"), true, "the active mode sits in the bottom composer toolbar");
+  assert.ok(ui.query("#composerModeIcon").querySelector("svg"), "the selected mode includes its icon");
+  assert.equal(ui.document.activeElement, ui.query("#terminalInput"), "selecting a mode returns focus to the primary dialog");
+  assert.equal(ui.query("#composerAddMenu").hidden, true, "selection applies and closes the options menu immediately");
+  assert.equal(ui.query("#composerModeClear").hidden, false);
+  assert.match(ui.query("#terminalGateHint").textContent, /只读取信息/);
+
+  ui.query("#composerQaBtn").click();
+  assert.equal(ui.query("#composerPlanBtn").getAttribute("aria-pressed"), "false");
+  assert.equal(ui.query("#composerQaBtn").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.query("#composerModeLabel").textContent, "仅问答");
+  assert.equal(ui.document.activeElement, ui.query("#terminalInput"));
+  assert.match(ui.query("#terminalGateHint").textContent, /只读工具/);
+
+  ui.query("#terminalInput").value = "读取当前状态";
+  ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles:true }));
+  ui.query("#terminalSendBtn").click();
+  const request = ui.messages.filter(message => message.type === "gateway-chat-request").at(-1);
+  assert.equal(request.composerMode, "qa");
+  assert.equal(request.planMode, false);
+  assert.deepEqual(request.enabledTools, ["list_files","read_file","web_search","web_fetch"]);
+
+  ui.receive({ type:"gateway-chat-started", requestId:request.requestId, prompt:"读取当前状态", cancellable:true });
+  ui.receive({ type:"gateway-chat-response", requestId:request.requestId, success:true, response:"当前状态正常。" });
+  assert.equal(ui.document.querySelectorAll(".turn__mode").item(1).textContent, "仅问答", "the sent turn keeps the selected mode annotation");
+  assert.equal(ui.document.querySelectorAll(".turn__ask-text").item(1).textContent, "读取当前状态", "mode instructions do not leak into the visible user message");
+});
+
+test("selecting a target immediately annotates the composer toolbar and can be cleared", t => {
+  const ui = page(t);
+  ui.receive({ type:"ui-state", state:baseState({ activeConversationId:"c1" }) });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query("#composerAddBtn").click();
+  ui.query("#composerTargetBtn").click();
+  assert.equal(ui.query("#composerModeLabel").textContent, "目标");
+  assert.equal(ui.query("#composerModeAnnotation").hidden, false);
+  assert.equal(ui.query("#composerModeAnnotation").parentElement.classList.contains("composer__toolbar"), true);
+  assert.equal(ui.document.activeElement, ui.query("#terminalInput"), "the main conversation field stays primary after selecting a mode");
+  assert.equal(ui.document.querySelector("#composerTargetInput"), null, "the goal is written directly in the main conversation field");
+  assert.equal(ui.query("#terminalInput").placeholder, "描述你的目标，并设定可衡量的预期成果，以取得最佳效果");
+  assert.equal(ui.query("#composerAddMenu").hidden, true);
+  const saved = ui.messages.filter(message => message.type === "save-state").at(-1);
+  assert.equal(saved.state.composer.mode, "goal", "selecting a mode is saved immediately");
+  assert.equal(saved.state.composer.target, "", "stale target text is not carried into the selected mode");
+  assert.equal(ui.query("#composerTargetBtn").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.query("#composerPlanBtn").getAttribute("aria-pressed"), "false");
+  assert.equal(ui.query("#composerQaBtn").getAttribute("aria-pressed"), "false");
+  ui.query("#composerModeClear").click();
+  assert.equal(ui.query("#composerModeAnnotation").hidden, true, "clearing the selected mode returns to the unlabelled default");
+  assert.equal(ui.document.activeElement, ui.query("#terminalInput"));
+  assert.equal(ui.messages.filter(message => message.type === "save-state").at(-1).state.composer.target, "");
+});
+
+test("controller model requests keep the prompt clean and send the selected mode separately", t => {
+  const ui = page(t);
+  addWorkspace(ui);
+  ui.receive({ type:"connected", side:"local", peer:"Remote computer", expiresAt, granted:["session","controller-model"] });
+  ui.query("#composerAddBtn").click();
+  ui.query("#composerQaBtn").click();
+  ui.query("#terminalInput").value = "解释连接状态";
+  ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles:true }));
+  ui.query("#terminalSendBtn").click();
+
+  const request = ui.messages.filter(message => message.type === "local-controller-model-request").at(-1);
+  assert.equal(request.displayPrompt, "解释连接状态");
+  assert.equal(request.composerMode, "qa");
+  assert.match(request.prompt, /仅问答模式/);
+  assert.equal(request.target, "");
+
+  ui.receive({ type:"local-controller-model-started", requestId:"local-q1", prompt:request.displayPrompt, composerMode:request.composerMode });
+  assert.equal(ui.document.querySelectorAll(".turn__ask-text").item(0).textContent, "解释连接状态");
+  assert.equal(ui.document.querySelectorAll(".turn__mode").item(0).textContent, "仅问答");
+});
+
 test("terminal chat routes reverse requests to the controller model when connected as controlled side", t => {
   const ui = page(t);
   addWorkspace(ui);
@@ -356,10 +516,68 @@ test("terminal chat routes reverse requests to the controller model when connect
   ui.query("#terminalInput").value = "问问主控端";
   ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
   ui.query("#terminalSendBtn").click();
-  assert.deepEqual(ui.messages.at(-1), { type: "controller-model-request", prompt: "问问主控端", workspaceRoot:"C:////Work////Alpha" });
+  assert.deepEqual(ui.messages.at(-1), { type: "controller-model-request", prompt: "问问主控端", model:"", reasoningEffort:"high", workspaceRoot:"C:////Work////Alpha" });
   ui.receive({ type: "controller-model-started", requestId: "r9", prompt: "问问主控端" });
   ui.receive({ type: "controller-model-response", requestId: "r9", success: true, response: "答案" });
   assert.match(ui.query("#terminalThread").textContent, /答案/);
+});
+
+test("controller model catalog uses gateway-style menus, display names, and ephemeral selection", async t => {
+  const ui = page(t);
+  addWorkspace(ui);
+  ui.receive({ type: "connected", side: "remote", peer: "Remote computer", expiresAt, granted: ["session", "controller-model"] });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.receive({
+    type: "controller-model-catalog",
+    success: true,
+    defaultModel: "gpt-6.1-sol",
+    defaultReasoningEffort: "medium",
+    models: [
+      { id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+      { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" }
+    ]
+  });
+  ui.query("#modelChip").click();
+  const modelEntry = [...ui.document.querySelectorAll("#convMenu .context-menu__item")].find(item => item.textContent.includes("GPT-5.6 Luna"));
+  assert.ok(modelEntry);
+  assert.doesNotMatch(modelEntry.textContent, /gpt-5\.6-luna/);
+  modelEntry.click();
+  assert.equal(ui.query("#modelChip").textContent, "GPT-5.6 Luna");
+  ui.query("#effortChip").click();
+  ui.query("#effortRange").value = "2";
+  ui.query("#effortRange").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
+  assert.match(ui.query("#effortChip").textContent, /高/);
+
+  ui.query("#terminalInput").value = "使用选定模型";
+  ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
+  ui.query("#terminalSendBtn").click();
+  assert.deepEqual(ui.messages.at(-1), {
+    type: "controller-model-request",
+    prompt: "使用选定模型",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "high",
+    workspaceRoot: "C:////Work////Alpha"
+  });
+  const saved = ui.messages.filter(message => message.type === "save-state").at(-1);
+  assert.equal(Object.prototype.hasOwnProperty.call(saved.state.settings, "controllerModel"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(saved.state.settings, "controllerEffort"), false);
+});
+
+test("relay fingerprint mismatch asks before allowing a connection", t => {
+  const ui = page(t);
+  ui.receive({
+    type: "relay-fingerprint-warning",
+    requestId: "fingerprint-1",
+    relay: relayBaseUrl,
+    fingerprint: "A".repeat(64),
+    previousFingerprint: "B".repeat(64),
+    mismatch: true
+  });
+  assert.equal(ui.query("#relayFingerprintScrim").hidden, false);
+  assert.match(ui.query("#relayFingerprintText").textContent, /SHA-256/);
+  ui.query("#relayFingerprintAllowBtn").click();
+  assert.deepEqual(ui.messages.at(-1), { type: "relay-fingerprint-response", requestId: "fingerprint-1", allow: true });
+  assert.equal(ui.query("#relayFingerprintScrim").hidden, true);
 });
 
 test("terminal chat explains when no reply channel is available", t => {
@@ -413,7 +631,7 @@ test("fixed and random authorization clicks forward their settings and stop remo
     ui.query("#createBtn").click();
     assert.deepEqual(ui.messages.at(-1), {
       type: "create", identity: "Remote computer", userName: "remote-user", credentialMode: mode,
-      fixedPassword: "long fixed password", rotationMinutes: 30, relay: relayBaseUrl,
+      fixedPassword: "long fixed password", rotationMinutes: 30, relay: relayBaseUrl, expectedFingerprint: "",
       permissions: ["session", "execute", "cancel"], workspaceRestricted: true, autoApproveTools: false
     });
     ui.query("#stopRemoteBtn").click();
@@ -472,9 +690,11 @@ test("home cards, settings and page title expose the revised layout", t => {
   const ui = page(t);
   assert.equal(ui.query("#pageBrand").textContent, "Remote CLI");
   assert.equal(ui.query("#remoteHomeCard").open, true);
-  assert.equal(ui.query("#localHomeCard").open, false);
-  ui.query("#localHomeCard summary").click();
   assert.equal(ui.query("#localHomeCard").open, true);
+  ui.query("#localHomeCard summary").click();
+  assert.equal(ui.query("#localHomeCard").open, false);
+  assert.ok(ui.query("#homeWorkspaceList"));
+  assert.ok(ui.query("#homeAddWorkspaceBtn"));
   ui.query('[data-page-pill="terminal"]').click();
   assert.equal(ui.query("#pageBrand").textContent, "Remote CLI");
   assert.ok(ui.query('#codexCliSettings').closest('[data-pane="connection"]'));
@@ -630,8 +850,15 @@ test("workspace tree groups folders by parent path and collapses", t => {
   assert.match(ui.query("#workspaceList").textContent, /Work/);
   assert.match(ui.query("#workspaceList").textContent, /Alpha/);
   assert.match(ui.query("#workspaceList").textContent, /Beta/);
+  assert.equal(ui.query(".tree-group__content").hidden, true, "tree folders start collapsed");
   ui.query(".tree-path").click();
-  assert.doesNotMatch(ui.query("#workspaceList").textContent, /Alpha/);
+  assert.equal(ui.query(".tree-group__content").hidden, false, "expanding the folder shows its workspaces");
+  let saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
+  assert.equal(saved.collapsed["C:/Work"], false, "the expanded folder is persisted as an explicit choice");
+  ui.query(".tree-path").click();
+  assert.equal(ui.query(".tree-group__content").hidden, true, "collapsing the folder hides its workspaces");
+  saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
+  assert.equal(saved.collapsed["C:/Work"], true, "the collapsed folder survives a redraw");
 });
 
 test("manual sort moves a session and persists order", t => {
@@ -725,6 +952,8 @@ test("settings window switches panes and exposes model controls", t => {
   ui.query("#accountBtn").click();
   assert.ok(ui.query("#settingsWindow"));
   assert.equal(ui.query("#settingsScrim").hidden, false);
+  assert.equal(ui.query("#relayFingerprintScrim").hidden, true);
+  assert.equal(ui.document.querySelector("#relayFingerprint"), null, "manual fingerprint override is removed");
   assert.equal(ui.query('[data-pane="connection"]').hidden, false);
   ui.query('[data-settings-pane="models"]').click();
   assert.equal(ui.query('[data-pane="models"]').hidden, false);
@@ -736,6 +965,28 @@ test("settings window switches panes and exposes model controls", t => {
   assert.equal(ui.query('[data-pane="workspaces"]').hidden, false);
   ui.query("#settingsCloseBtn").click();
   assert.equal(ui.query("#settingsScrim").hidden, true);
+});
+
+test("settings search matches pane content, selects results, and clears with Escape", t => {
+  const ui = page(t);
+  ui.query("#accountBtn").click();
+  const search = ui.query("#settingsSearchInput");
+  search.value = "中继地址";
+  search.dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
+  assert.equal(ui.query('[data-settings-pane="connection"]').hidden, false);
+  assert.equal(ui.query('[data-settings-pane="models"]').hidden, true);
+  assert.equal(ui.query('[data-pane="connection"]').hidden, false);
+  assert.match(ui.query("#settingsSearchStatus").textContent, /找到 1 个设置分组/);
+
+  search.value = "完全不存在的设置";
+  search.dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
+  assert.equal(ui.query("#settingsSearchStatus").textContent, "未找到匹配的设置");
+  assert.equal(ui.query('[data-pane="connection"]').hidden, true);
+
+  search.dispatchEvent(new ui.document.defaultView.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(search.value, "");
+  assert.equal(ui.query("#settingsSearchStatus").hidden, true);
+  assert.equal(ui.query('[data-pane="connection"]').hidden, false);
 });
 
 test("file panel lists workspace entries and previews text", t => {
@@ -758,7 +1009,7 @@ test("file panel lists workspace entries and previews text", t => {
   assert.equal(rows.length, 2);
   rows[0].click();
   assert.deepEqual(ui.messages.at(-1),
-    { type: "read-workspace-file", path: "C://Work//Alpha//a.txt", root: "C://Work//Alpha", requestId: "2", officePreviewEnabled: false });
+    { type: "read-workspace-file", path: "C://Work//Alpha//a.txt", root: "C://Work//Alpha", requestId: "2" });
 
   ui.receive({ type: "workspace-file", path: "C://Work//Alpha//a.txt", kind: "text", content: "hello world" });
   assert.equal(ui.query("#filesPreview").hidden, false);
@@ -770,6 +1021,371 @@ test("file panel lists workspace entries and previews text", t => {
 
   ui.query("#filesCloseBtn").click();
   assert.equal(ui.query("#filesPanel").hidden, true);
+});
+
+test("file rows expose open-with context menus and the folder button opens Explorer", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.query("#filesToggle").click();
+  const listRequest = ui.messages.at(-1);
+  ui.receive({
+    type: "workspace-files",
+    path: "C://Work//Alpha", requestId: listRequest.requestId,
+    entries: [
+      { name: "src", path: "C://Work//Alpha//src", isDirectory: true, size: 0 },
+      { name: "a.txt", path: "C://Work//Alpha//a.txt", isDirectory: false, size: 12 }
+    ]
+  });
+  const rows = [...ui.query("#filesList").querySelectorAll(".file-row")];
+  assert.equal(ui.query("#filesRevealBtn").hidden, false);
+
+  const menu = ui.query("#convMenu");
+  const items = () => [...menu.querySelectorAll(".context-menu__item")];
+  const labels = () => items().map(item => item.textContent);
+  const pick = label => {
+    const item = items().find(candidate => candidate.textContent.startsWith(label));
+    assert.ok(item, `missing menu item: ${label} (${labels().join(" / ")})`);
+    item.click();
+  };
+  const rightClick = element => element.dispatchEvent(new ui.document.defaultView.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 160, clientY: 120 }));
+
+  assert.equal(rightClick(rows[0]), false, "the browser context menu must be suppressed");
+  assert.equal(menu.classList.contains("open"), true);
+  assert.ok(labels().some(label => label.startsWith("打开目录")));
+  assert.ok(labels().some(label => label.startsWith("打开方式")));
+  pick("打开方式");
+  assert.deepEqual(labels(), ["文件资源管理器", "终端", "Visual Studio Code"]);
+  ui.messages.length = 0;
+  pick("文件资源管理器");
+  assert.deepEqual(ui.messages.at(-1), { type:"open-path", path:"C://Work//Alpha//src", root:"C://Work//Alpha", mode:"explorer" });
+
+  rightClick(rows[1]);
+  assert.ok(labels().some(label => label.startsWith("在文件资源管理器中显示")));
+  pick("打开方式");
+  assert.deepEqual(labels(), ["默认程序", "Visual Studio Code", "记事本", "选择其他应用…"]);
+  ui.messages.length = 0;
+  pick("默认程序");
+  assert.deepEqual(ui.messages.at(-1), { type:"open-path", path:"C://Work//Alpha//a.txt", root:"C://Work//Alpha", mode:"default" });
+
+  ui.messages.length = 0;
+  ui.query("#filesRevealBtn").click();
+  assert.deepEqual(ui.messages.at(-1), { type:"open-path", path:"C://Work//Alpha", root:"C://Work//Alpha", mode:"explorer" });
+  rows[1].click();
+  ui.messages.length = 0;
+  ui.query("#filesRevealBtn").click();
+  assert.deepEqual(ui.messages.at(-1), { type:"open-path", path:"C://Work//Alpha//a.txt", root:"C://Work//Alpha", mode:"reveal" });
+});
+
+test("open-with menus read shell icons once and hide missing programs", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+
+  const prefetch = ui.messages.filter(message => message.type === "path-icons").at(-1);
+  assert.deepEqual(prefetch.items.map(item => item.key), ["app:explorer", "app:terminal", "app:code", "app:notepad"]);
+  ui.receive({ type: "path-icons", requestId: prefetch.requestId, icons: {
+    "app:explorer": "data:image/png;base64,AAA",
+    "app:terminal": "data:image/png;base64,BBB",
+    "app:code": null,
+    "app:notepad": "data:image/png;base64,CCC",
+    "app:openas": "data:image/png;base64,DDD"
+  } });
+
+  ui.query("#filesToggle").click();
+  const listRequest = ui.messages.filter(message => message.type === "list-workspace-files").at(-1);
+  ui.receive({
+    type: "workspace-files",
+    path: "C://Work//Alpha", requestId: listRequest.requestId,
+    entries: [
+      { name: "src", path: "C://Work//Alpha//src", isDirectory: true, size: 0 },
+      { name: "a.txt", path: "C://Work//Alpha//a.txt", isDirectory: false, size: 12 }
+    ]
+  });
+  const rows = [...ui.query("#filesList").querySelectorAll(".file-row")];
+  const menu = ui.query("#convMenu");
+  const items = () => [...menu.querySelectorAll(".context-menu__item")];
+  const labels = () => items().map(item => item.textContent);
+  const pick = label => {
+    const item = items().find(candidate => candidate.textContent.startsWith(label));
+    assert.ok(item, `missing menu item: ${label} (${labels().join(" / ")})`);
+    item.click();
+  };
+  const rightClick = element => element.dispatchEvent(new ui.document.defaultView.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 160, clientY: 120 }));
+
+  rightClick(rows[0]);
+  pick("打开方式");
+  assert.deepEqual(labels(), ["文件资源管理器", "终端"], "VS Code is hidden when the host reports no icon for it");
+  const directoryIcons = [...menu.querySelectorAll(".context-menu__icon")];
+  assert.deepEqual(directoryIcons.map(icon => icon.dataset.iconKey), ["app:explorer", "app:terminal"]);
+  assert.equal(directoryIcons[0].src, "data:image/png;base64,AAA");
+  assert.equal(directoryIcons[0].hidden, false);
+  assert.equal(ui.messages.filter(message => message.type === "path-icons").length, 1, "cached program icons are not requested again");
+
+  rightClick(rows[1]);
+  pick("打开方式");
+  assert.deepEqual(labels(), ["默认程序", "记事本", "选择其他应用…"]);
+  const fileRequest = ui.messages.filter(message => message.type === "path-icons").at(-1);
+  assert.deepEqual(fileRequest.items, [{ key:"file:c://work//alpha//a.txt", kind:"path", value:"C://Work//Alpha//a.txt" }]);
+  ui.receive({ type: "path-icons", requestId: fileRequest.requestId, icons: { "file:c://work//alpha//a.txt": "data:image/png;base64,EEE" } });
+  assert.equal(menu.querySelector(".context-menu__icon[data-icon-key='file:c://work//alpha//a.txt']").src, "data:image/png;base64,EEE");
+});
+
+test("presented deliverables render as cards and open the right-side preview", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({
+    activeConversationId: "c1",
+    conversations: [{
+      id: "c1", workspaceId: "ws-a", title: "生成报告", pinned: false, unread: false, archived: false, order: 1,
+      createdAt: 1, updatedAt: 3,
+      messages: [
+        { role: "user", who: "你", text: "生成报告", at: 1 },
+        { role: "agent", who: "Remote CLI", text: "报告已经生成。", at: 2, deliverables: [
+          { path: "C://Work//Alpha//report.md", description: "本次评估报告" },
+          { path: "C://Work//Alpha//sheet.xlsx" }
+        ] }
+      ]
+    }]
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+
+  const cards = [...ui.query("#terminalThread").querySelectorAll(".deliverable")];
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].querySelector(".deliverable__name").textContent, "report.md");
+  assert.equal(cards[0].querySelector(".deliverable__desc").textContent, "本次评估报告");
+  assert.equal(cards[1].querySelector(".deliverable__name").textContent, "sheet.xlsx");
+  assert.equal(cards[1].querySelector(".deliverable__desc").textContent, "XLSX 文件");
+  assert.equal(cards[0].title, "C://Work//Alpha//report.md");
+
+  cards[0].click();
+  const preview = ui.messages.filter(message => message.type === "read-workspace-file").at(-1);
+  assert.equal(preview.path, "C://Work//Alpha//report.md");
+  assert.equal(ui.query("#filesPreview").hidden, false);
+  assert.equal(ui.query("#filesPanel").hidden, false);
+});
+
+test("deliverables that arrive mid-request attach to the finished reply", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({
+    activeConversationId: "c1",
+    settings: {
+      relay: relayBaseUrl, replySource: "gateway", gatewayUrl: "https://gw.example.com/v1", gatewayApiKey: "test-key",
+      backend: "openai", models: ["test-model"], defaultModel: "test-model",
+      globalTools: ["list_files", "read_file", "web_search", "present"], tools: ["list_files", "read_file", "web_search", "present"]
+    }
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query("#terminalInput").value = "生成报告";
+  ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
+  ui.query("#terminalSendBtn").click();
+  const request = ui.messages.filter(message => message.type === "gateway-chat-request").at(-1);
+  assert.ok(request, "the terminal must send a gateway request");
+  assert.ok(request.enabledTools.includes("present"));
+
+  ui.receive({ type: "gateway-chat-started", requestId: request.requestId, prompt: "生成报告", cancellable: true });
+  ui.receive({ type: "deliverables", requestId: request.requestId, files: [
+    { path: "C://Work//Alpha//report.md", description: "本次报告" }
+  ] });
+  assert.equal(ui.query("#terminalThread").querySelectorAll(".deliverable").length, 0, "cards wait for the reply");
+  ui.receive({ type: "gateway-chat-response", requestId: request.requestId, success: true, response: "报告已生成。" });
+
+  const cards = [...ui.query("#terminalThread").querySelectorAll(".deliverable")];
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].querySelector(".deliverable__name").textContent, "report.md");
+  assert.equal(cards[0].querySelector(".deliverable__desc").textContent, "本次报告");
+  const saved = ui.messages.filter(message => message.type === "save-state").at(-1);
+  const stored = saved.state.conversations.find(conversation => conversation.id === "c1").messages
+    .find(message => message.role === "agent" && Array.isArray(message.deliverables));
+  assert.equal(stored.deliverables[0].path, "C://Work//Alpha//report.md");
+});
+
+test("choosing another app lists candidates, opens the file, and closes the picker", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.query("#filesToggle").click();
+  const listRequest = ui.messages.filter(message => message.type === "list-workspace-files").at(-1);
+  ui.receive({
+    type: "workspace-files", path: "C://Work//Alpha", requestId: listRequest.requestId,
+    entries: [{ name: "a.txt", path: "C://Work//Alpha//a.txt", isDirectory: false, size: 12 }]
+  });
+  const row = ui.query("#filesList .file-row");
+  row.dispatchEvent(new ui.document.defaultView.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 160, clientY: 120 }));
+  const menu = ui.query("#convMenu");
+  const items = () => [...menu.querySelectorAll(".context-menu__item")];
+  const pick = label => {
+    const item = items().find(candidate => candidate.textContent.startsWith(label));
+    assert.ok(item, `missing menu item: ${label}`);
+    item.click();
+  };
+  pick("打开方式");
+  pick("选择其他应用…");
+
+  const openWithRequest = ui.messages.filter(message => message.type === "list-open-with").at(-1);
+  assert.equal(openWithRequest.path, "C://Work//Alpha//a.txt");
+  assert.equal(openWithRequest.root, "C://Work//Alpha");
+  ui.receive({ type: "open-with-list", requestId: openWithRequest.requestId, path: "C://Work//Alpha//a.txt", apps: [
+    { name: "Notepad++", path: "C:\\Apps\\notepad++.exe", isDefault: false },
+    { name: "记事本", path: "C:\\Windows\\notepad.exe", isDefault: true }
+  ] });
+  assert.equal(ui.query("#openWithScrim").hidden, false);
+  assert.equal(ui.query("#openWithPath").textContent, "C://Work//Alpha//a.txt");
+  const candidates = [...ui.query("#openWithList").querySelectorAll(".open-with-item")];
+  assert.equal(candidates.length, 2);
+  assert.match(candidates[1].querySelector(".open-with-item__name").textContent, /记事本默认/);
+  assert.equal(candidates[0].querySelector(".open-with-item__path").textContent, "C:\\Apps\\notepad++.exe");
+
+  ui.messages.length = 0;
+  candidates[0].click();
+  assert.deepEqual(ui.messages.at(-1), {
+    type: "open-path", path: "C://Work//Alpha//a.txt", root: "C://Work//Alpha", mode: "app", app: "C:\\Apps\\notepad++.exe"
+  });
+  assert.equal(ui.query("#openWithScrim").hidden, true);
+});
+
+test("absolute backslash paths are not re-rooted under the workspace", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({
+    activeConversationId: "c1",
+    conversations: [{
+      id: "c1", workspaceId: "ws-a", title: "路径", pinned: false, unread: false, archived: false, order: 1, createdAt: 1, updatedAt: 3,
+      messages: [
+        { role: "user", who: "你", text: "看下报告", at: 1 },
+        { role: "agent", who: "Remote CLI", text: "报告在 `C:\\Work\\Alpha\\docs\\report.md` 里。", at: 2 }
+      ]
+    }]
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+
+  const link = ui.query("#terminalThread a.file-link");
+  assert.equal(link.textContent, "C:\\Work\\Alpha\\docs\\report.md");
+  assert.equal(link.title, "预览文件：C:\\Work\\Alpha\\docs\\report.md", "the resolved path must not repeat the workspace root");
+  link.click();
+  const read = ui.messages.filter(message => message.type === "read-workspace-file").at(-1);
+  assert.equal(read.path, "C:\\Work\\Alpha\\docs\\report.md");
+  assert.equal(ui.query("#filesPreviewName").textContent, "C:\\Work\\Alpha\\docs\\report.md");
+});
+
+test("previewing a directory opens the file list instead of a missing-file note", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({
+    activeConversationId: "c1",
+    conversations: [{
+      id: "c1", workspaceId: "ws-a", title: "目录", pinned: false, unread: false, archived: false, order: 1, createdAt: 1, updatedAt: 3,
+      messages: [
+        { role: "user", who: "你", text: "看看这个目录", at: 1 },
+        { role: "agent", who: "Remote CLI", text: "目录在这里。", at: 2, deliverables: [{ path: "C://Work//Alpha//src" }] }
+      ]
+    }]
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query(".deliverable").click();
+  const read = ui.messages.filter(message => message.type === "read-workspace-file").at(-1);
+  assert.equal(read.path, "C://Work//Alpha//src");
+  assert.equal(ui.query("#filesPreview").hidden, false);
+
+  ui.receive({ type: "workspace-file", path: read.path, requestId: read.requestId, kind: "directory" });
+  assert.equal(ui.query("#filesPreview").hidden, true);
+  assert.equal(ui.query("#filesList").hidden, false);
+  const listing = ui.messages.filter(message => message.type === "list-workspace-files").at(-1);
+  assert.equal(listing.path, "C://Work//Alpha//src");
+  assert.equal(ui.query("#filesTitle").textContent, "C://Work//Alpha//src");
+});
+
+test("opening a path from the reply lists its folder and highlights the file", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({
+    activeConversationId: "c1",
+    conversations: [{
+      id: "c1", workspaceId: "ws-a", title: "报告", pinned: false, unread: false, archived: false, order: 1, createdAt: 1, updatedAt: 3,
+      messages: [
+        { role: "user", who: "你", text: "看报告", at: 1 },
+        { role: "agent", who: "Remote CLI", text: "报告在这里。", at: 2, deliverables: [{ path: "C://Work//Alpha//report.md", description: "报告" }] }
+      ]
+    }]
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query(".deliverable").click();
+
+  assert.equal(ui.query("#filesList").hidden, false, "the folder list stays visible next to the preview");
+  assert.equal(ui.query("#filesPanel").dataset.preview, "true");
+  assert.equal(ui.query("#filesTitle").textContent, "report.md");
+
+  const listRequest = ui.messages.filter(message => message.type === "list-workspace-files").at(-1);
+  assert.equal(listRequest.path, "C:/Work/Alpha");
+  ui.receive({
+    type: "workspace-files", path: listRequest.path, root: listRequest.root, requestId: listRequest.requestId,
+    entries: [
+      { name: "other.md", path: "C://Work//Alpha//other.md", isDirectory: false, size: 10 },
+      { name: "report.md", path: "C://Work//Alpha//report.md", isDirectory: false, size: 10 }
+    ]
+  });
+  const rows = [...ui.query("#filesList").querySelectorAll(".file-row")];
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].classList.contains("is-current"), true, "the previewed file is marked in the list");
+  assert.equal(rows[0].classList.contains("is-current"), false);
+  assert.equal(ui.query("#filesTitle").textContent, "report.md", "loading the folder must not replace the file title");
+});
+
+test("unsupported files show a centered notice with open buttons", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.query("#filesToggle").click();
+  const listing = ui.messages.filter(message => message.type === "list-workspace-files").at(-1);
+  ui.receive({
+    type: "workspace-files", path: listing.path, root: listing.root, requestId: listing.requestId,
+    entries: [{ name: "data.bin", path: "C://Work//Alpha//data.bin", isDirectory: false, size: 10 }]
+  });
+  ui.query("#filesList .file-row").click();
+  const read = ui.messages.filter(message => message.type === "read-workspace-file").at(-1);
+  ui.receive({ type: "workspace-file", path: read.path, requestId: read.requestId, kind: "binary", size: 10 });
+
+  assert.equal(ui.query("#filesPreviewUnsupported").hidden, false);
+  assert.equal(ui.query("#filesPreviewUnsupportedText").textContent, "这个文件不支持在应用内预览");
+  assert.equal(ui.query("#filesPreviewNote").hidden, true);
+
+  ui.messages.length = 0;
+  ui.query("#filesPreviewOpenBtn").click();
+  assert.deepEqual(ui.messages.at(-1), { type: "open-path", path: "C://Work//Alpha//data.bin", root: "C://Work//Alpha", mode: "default" });
+
+  ui.messages.length = 0;
+  ui.query("#filesPreviewOpenWithBtn").click();
+  const picker = ui.messages.at(-1);
+  assert.equal(picker.type, "list-open-with");
+  assert.equal(picker.path, "C://Work//Alpha//data.bin");
+});
+
+test("a failed open shows its notice inside the preview panel", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.receive({ type: "open-path-failed", path: "C://Work//Alpha//data.bin", message: "系统里没有登记可以打开这个文件的程序。" });
+
+  assert.equal(ui.query("#filesPanel").hidden, false);
+  assert.equal(ui.query("#filesPreview").hidden, false);
+  assert.equal(ui.query("#filesTitle").textContent, "data.bin");
+  assert.equal(ui.query("#filesPreviewName").textContent, "C://Work//Alpha//data.bin");
+  assert.equal(ui.query("#filesPreviewUnsupported").hidden, false);
+  assert.equal(ui.query("#filesPreviewUnsupportedText").textContent, "系统里没有登记可以打开这个文件的程序。");
+});
+
+test("delivered files stay clickable when the reply mentions them inline", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({
+    activeConversationId: "c1",
+    conversations: [{
+      id: "c1", workspaceId: "ws-a", title: "打包", pinned: false, unread: false, archived: false, order: 1, createdAt: 1, updatedAt: 3,
+      messages: [
+        { role: "user", who: "你", text: "打包", at: 1 },
+        { role: "agent", who: "Remote CLI", text: "打包结果在 `release.zip`，源码见 `src`。", at: 2,
+          deliverables: [{ path: "C://Work//Alpha//release.zip", description: "发布包" }] }
+      ]
+    }]
+  }) });
+  ui.query('[data-page-pill="terminal"]').click();
+
+  const links = [...ui.query("#terminalThread").querySelectorAll("a.file-link")];
+  assert.equal(links.length, 1, "only the delivered file becomes a link");
+  assert.equal(links[0].textContent, "release.zip");
+  links[0].click();
+  const read = ui.messages.filter(message => message.type === "read-workspace-file").at(-1);
+  assert.equal(read.path, "C://Work//Alpha//release.zip");
 });
 
 test("right panel opens on the home page and previews Word and Excel safely", t => {
@@ -918,18 +1534,62 @@ test("model discovery fills the list from the gateway", t => {
   assert.equal(ui.query("#defaultModelSelect").value, "claude-a");
 });
 
-test("Office preview stays disabled until enabled in global settings", t => {
+test("Office preview plugin installs and uninstalls from global settings", t => {
   const ui = page(t);
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "office-preview", installed: false }] });
   ui.query("#accountBtn").click();
   ui.query('[data-settings-pane="tools"]').click();
-  assert.equal(ui.query("#officePreviewEnabled").checked, false);
-  ui.query("#officePreviewEnabled").click();
-  ui.query("#settingsSaveBtn").click();
-  const saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
-  assert.equal(saved.settings.officePreviewEnabled, true);
-  ui.query("#accountBtn").click();
-  ui.query('[data-settings-pane="tools"]').click();
-  assert.equal(ui.query("#officePreviewEnabled").checked, true);
+
+  const stateEl = ui.query("#pluginState-office-preview");
+  const button = ui.query("#pluginToggle-office-preview");
+  assert.equal(stateEl.textContent, "未安装");
+  assert.equal(button.textContent, "安装");
+
+  button.click();
+  assert.deepEqual(ui.messages.at(-1), { type: "install-plugin", id: "office-preview" });
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "取消");
+  assert.equal(button.classList.contains("is-danger"), true);
+  assert.equal(stateEl.textContent, "正在准备安装…");
+
+  ui.receive({ type: "plugin-status", id: "office-preview", state: "installing", phase: "download", percent: 42 });
+  assert.equal(stateEl.textContent, "正在下载预览组件… 42%");
+  assert.equal(button.textContent, "取消");
+  ui.receive({ type: "plugin-status", id: "office-preview", state: "installing", phase: "extract" });
+  assert.equal(stateEl.textContent, "正在解压预览组件…");
+
+  button.click();
+  assert.deepEqual(ui.messages.at(-1), { type: "cancel-plugin", id: "office-preview" });
+  assert.equal(button.disabled, true);
+  assert.equal(button.textContent, "正在取消…");
+  assert.equal(stateEl.textContent, "正在取消…");
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "office-preview", installed: false }] });
+  assert.equal(stateEl.textContent, "未安装");
+  assert.equal(button.textContent, "安装");
+  assert.equal(button.disabled, false);
+  assert.equal(button.classList.contains("is-danger"), false);
+
+  button.click();
+  assert.deepEqual(ui.messages.at(-1), { type: "install-plugin", id: "office-preview" });
+  assert.equal(button.textContent, "取消");
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "office-preview", installed: true }] });
+  assert.equal(stateEl.textContent, "已安装");
+  assert.equal(button.textContent, "卸载");
+  assert.equal(button.disabled, false);
+
+  button.click();
+  assert.deepEqual(ui.messages.at(-1), { type: "uninstall-plugin", id: "office-preview" });
+  assert.equal(button.disabled, true);
+  assert.equal(stateEl.textContent, "正在卸载预览组件…");
+
+  ui.receive({ type: "plugin-status", id: "office-preview", state: "failed", text: "Office 预览组件正在使用，无法卸载。" });
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "卸载");
+  assert.equal(stateEl.textContent, "Office 预览组件正在使用，无法卸载。");
+
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "office-preview", installed: false }] });
+  assert.equal(stateEl.textContent, "未安装");
+  assert.equal(button.textContent, "安装");
 });
 
 test("terminal renders reasoning, tool calls, and tool results", t => {
@@ -949,7 +1609,7 @@ test("terminal renders reasoning, tool calls, and tool results", t => {
   const card = ui.query('#terminalThread .node--tool');
   const runningProcess = card.closest(".turn__process");
   assert.ok(runningProcess, "running nodes belong to the internal process tree");
-  assert.equal(runningProcess.hidden, false);
+  assert.equal(runningProcess.hidden, true, "the process tree starts collapsed even while streaming");
   assert.equal(runningProcess.dataset.running, "true");
   assert.equal(card.classList.contains("is-running"), true);
   assert.match(card.textContent, /list_files/);
@@ -968,10 +1628,14 @@ test("terminal renders reasoning, tool calls, and tool results", t => {
   const completedTurns = [...ui.document.querySelectorAll("#terminalThread .turn:not(.turn--bare)")];
   const completedTurn = completedTurns[completedTurns.length - 1];
   const process = completedTurn.querySelector(".turn__process");
-  assert.equal(process.hidden, true, "completed process is collapsed as a group");
+  assert.equal(process.hidden, true, "completed process stays collapsed when the user never opened it");
   assert.equal(process, runningProcess, "completion retains the same process tree");
   assert.equal(process.dataset.running, "false", "completion stops the internal guide animation");
-  assert.match(completedTurn.querySelector(".turn__toggle").textContent, /用时/);
+  const processToggle = completedTurn.querySelector(".turn__toggle");
+  assert.match(processToggle.textContent, /用时/);
+  assert.equal(processToggle.firstElementChild.className, "turn__toggle-label", "the duration and arrow share one label");
+  assert.equal(processToggle.querySelector(".turn__toggle-label-text").nextElementSibling.className, "turn__chevron", "the expand arrow follows the duration");
+  assert.equal(processToggle.querySelector(".turn__chevron").getAttribute("aria-hidden"), "true");
   assert.ok(process.querySelector(".node--think"));
   assert.ok(process.querySelector(".node--tool"));
   assert.match(completedTurn.querySelector(".node--agent .node__text").textContent, /看完了/);
@@ -979,7 +1643,8 @@ test("terminal renders reasoning, tool calls, and tool results", t => {
   assert.match(completedTurn.querySelector(".node--agent .chat-markdown").className, /chat-markdown/);
   completedTurn.querySelector(".turn__toggle").click();
   assert.equal(process.hidden, false, "completed process can be reopened");
-  assert.equal(process.querySelector(".node--think").classList.contains("node--open"), true);
+  assert.equal(process.querySelector(".node--think").classList.contains("node--open"), false, "opening the process does not force tool panels open");
+  assert.equal(process.querySelector(".node--tool").classList.contains("node--open"), false, "tool panels stay independently collapsed");
   assert.equal(completedTurn.querySelector(".node--agent").closest(".turn__process"), null);
 });
 
@@ -1057,13 +1722,15 @@ test("process guides stay inside the tree through streaming, expansion and compl
   await receive({ type: "gateway-chat-delta", requestId: "tree-guide", text: "接着读取文件。" });
   await receive({ type: "tool-call", requestId: "tree-guide", callId: "second", name: "read_file", arguments: "path=a.txt" });
   const processTree = browserPage.locator('.turn__process[data-running="true"]');
+  assert.equal(await processTree.isVisible(), false, "the process tree stays collapsed by default");
+  await browserPage.locator(".turn__toggle").last().click();
   await processTree.waitFor({ state: "visible" });
   assert.deepEqual(await processTree.locator(":scope > .node").evaluateAll(nodes => nodes.map(node =>
     node.classList.contains("node--action-group") ? node.querySelector(".node--tool .node__meta").textContent.includes("list_files") ? "first" : "second" : "comment")),
     ["first", "comment", "second"], "streamed commentary keeps its chronological position inside the process");
 
   async function checkGeometry() {
-    await browserPage.evaluate(() => Promise.all(document.getAnimations()
+    await processTree.evaluate(tree => Promise.allSettled(tree.getAnimations({ subtree:true })
       .filter(animation => Number.isFinite(animation.effect.getComputedTiming().endTime)).map(animation => animation.finished)));
     const geometry = await processTree.evaluate(tree => {
       const group = tree.parentElement.getBoundingClientRect();
@@ -1103,18 +1770,19 @@ test("process guides stay inside the tree through streaming, expansion and compl
   fs.mkdirSync(screenshotDirectory, { recursive: true });
   await browserPage.screenshot({ path: path.join(screenshotDirectory, "conversation-tree-internal.png") });
   await receive({ type: "tool-result", requestId: "tree-guide", callId: "second", ok: true, result: "文件内容" });
-  const collapseFilters = await browserPage.evaluate(message => {
-    window.testReceive(message);
-    const element = document.querySelector('.turn__process[data-running="false"]');
-    return element.getAnimations().flatMap(animation => animation.effect.getKeyframes().map(frame => frame.filter || ""));
-  }, { type: "gateway-chat-response", requestId: "tree-guide", success: true, response: "检查完成。" });
-  assert.ok(collapseFilters.some(value => value.includes("blur(4px)")), "completion fades the process with blur");
+  await receive({ type: "gateway-chat-response", requestId: "tree-guide", success: true, response: "检查完成。" });
   const completed = browserPage.locator('.turn__process[data-running="false"]');
-  await completed.waitFor({ state:"hidden" });
-  assert.equal(await completed.isVisible(), false, "tool-only processes collapse on completion");
-  assert.equal(await browserPage.locator(".turn__kids > .node--agent").last().innerText(), "检查完成。");
-  await completed.locator("..").locator(".turn__toggle").click();
   await completed.waitFor({ state: "visible" });
+  assert.equal(await completed.isVisible(), true, "a process the user opened stays open after completion");
+  assert.equal(await browserPage.locator(".turn__kids > .node--agent").last().innerText(), "检查完成。");
+  const collapseFilters = await completed.locator("..").locator(".turn__toggle").evaluate(button => {
+    button.click();
+    return button.parentElement.querySelector(".turn__process")
+      .getAnimations().flatMap(animation => animation.effect.getKeyframes().map(frame => frame.filter || ""));
+  });
+  assert.ok(collapseFilters.some(value => value.includes("blur(4px)")), "collapsing by hand fades the process with blur");
+  await completed.waitFor({ state: "hidden" });
+  assert.equal(await completed.isVisible(), false, "collapsing hides the process");
   assert.equal(await completed.locator(".node").first().evaluate(node => getComputedStyle(node, "::after").animationName), "none");
 });
 
@@ -1127,7 +1795,8 @@ test("tool toggles persist from the settings window", t => {
   ui.query("#webSearchProvider").dispatchEvent(new ui.document.defaultView.Event("change", { bubbles: true }));
   assert.equal(ui.query("#webSearchBaseUrl").value, "https://api.deepseek.com/v1/tools");
   const boxes = [...ui.document.querySelectorAll('input[name="chatTool"]')];
-  assert.equal(boxes.length, 17);
+  assert.equal(boxes.length, 18);
+  assert.equal(boxes.find(item => item.value === "present").checked, true);
   for (const name of ["search_text", "edit_file", "web_fetch", "exec_command", "remote_tools", "remote_commands", "glob", "grep", "apply_patch", "exa_search", "subagents"]) {
     const box = boxes.find(item => item.value === name);
     assert.ok(box);
@@ -1229,12 +1898,46 @@ test("actual model usage drives the turn label, context window and conversation 
   assert.equal(ui.query("#conversationTokens").textContent, "本对话总共消耗 —");
 });
 
+test("prediction uses the configured training folder and updates until actual usage arrives", t => {
+  const ui = page(t);
+  const settings = { relay:relayBaseUrl, replySource:"gateway", gatewayUrl:"https://gateway.example/v1", models:["m"], defaultModel:"m", tools:[] };
+  ui.receive({ type:"ui-state", state:baseState({ settings, activeConversationId:"c1" }) });
+  ui.query("#accountBtn").click();
+  ui.query('[data-settings-pane="general"]').click();
+  ui.query("#tokenTrainingBrowseBtn").click();
+  assert.deepEqual(ui.messages.at(-1), { type:"select-token-training-folder" });
+  ui.receive({ type:"token-training-folder", path:"D:\\TokenTraining" });
+  ui.query("#settingsSaveBtn").click();
+  assert.equal(ui.messages.filter(message => message.type === "save-state").at(-1).state.settings.tokenTrainingPath, "D:\\TokenTraining");
+
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query("#terminalInput").value = "问题";
+  ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input", { bubbles:true }));
+  ui.query("#terminalSendBtn").click();
+  const request = ui.messages.filter(message => message.type === "gateway-chat-request").at(-1);
+  assert.equal(request.tokenTrainingPath, "D:\\TokenTraining");
+  ui.receive({ type:"gateway-chat-started", requestId:request.requestId, prompt:"问题", cancellable:true });
+  ui.receive({ type:"gateway-token-prediction", requestId:request.requestId, predictedTurnTotalTokens:523, sampleCount:0 });
+  let turn = [...ui.document.querySelectorAll(".turn")].at(-1);
+  assert.equal(turn.querySelector(".turn__usage").textContent, "预计本次消耗 523 Token");
+  assert.equal(turn.querySelector(".turn__usage").title, "冷启动估算");
+  ui.receive({ type:"reasoning", requestId:request.requestId, text:"思考中" });
+  ui.receive({ type:"gateway-token-prediction", requestId:request.requestId, predictedTurnTotalTokens:850, sampleCount:4 });
+  turn = [...ui.document.querySelectorAll(".turn")].at(-1);
+  assert.equal(turn.querySelector(".turn__usage").textContent, "预计本次消耗 850 Token");
+  assert.match(turn.querySelector(".node--think .node__meta").textContent, /预计本次总消耗 约 850 tokens/);
+  ui.receive({ type:"gateway-usage", requestId:request.requestId, round:1, inputTokens:100, outputTokens:836, totalTurnTokens:936 });
+  assert.equal(turn.querySelector(".turn__usage").textContent, "预计本次消耗 850 Token");
+  ui.receive({ type:"gateway-chat-response", requestId:request.requestId, success:true, response:"完成" });
+  assert.equal(turn.querySelector(".turn__usage").textContent, "本次消耗 936 Token");
+});
+
 test("models retain their own context and common sampling parameters", t => {
   const ui = page(t);
   const settings = { relay:relayBaseUrl, replySource:"gateway", gatewayUrl:"https://gateway.example/v1", models:["model-a"], defaultModel:"model-a", tools:[] };
   ui.receive({ type:"ui-state", state:baseState({ settings, activeConversationId:"c1" }) });
   ui.query("#accountBtn").click(); ui.query('[data-settings-pane="models"]').click();
-  assert.equal(ui.query('[data-param="contextWindow"]').value, "256000");
+  assert.equal(ui.query('[data-param="contextWindow"]').value, "128000");
   for(const [key,value] of [["contextWindow","128000"],["maxOutputTokens","4096"],["temperature","0.7"],["topP","0.9"]]){
     const input = ui.query(`[data-param="${key}"]`); input.value = value;
     input.dispatchEvent(new ui.document.defaultView.Event("input", { bubbles:true }));
@@ -1299,7 +2002,7 @@ test("loading and tool timeline follow events, even after switching conversation
   const second = { id: "c2", workspaceId: "ws-a", title: "另一会话", messages: [{ role: "user", text: "other", at: 2 }], createdAt: 2, updatedAt: 2 };
   ui.receive({ type: "ui-state", state: baseState({ conversations: [first, second], activeConversationId: "c1" }) });
   ui.receive({ type: "gateway-chat-started", requestId: "ordered", prompt: "task", cancellable: true });
-  assert.match(ui.query(".terminal-loading").textContent, /正在生成/);
+  assert.match(ui.query(".terminal-loading").textContent, /正在等待模型响应/);
   ui.receive({ type: "gateway-chat-delta", requestId: "ordered", kind: "reasoning", text: "先分析" });
   ui.receive({ type: "gateway-chat-delta", requestId: "ordered", kind: "text", text: "先看文件" });
   ui.receive({ type: "reasoning-done", requestId: "ordered", text: "先分析" });
@@ -1344,6 +2047,39 @@ test("assistant markdown and terminal output render without executing embedded m
   assert.equal(ui.query(".chat-markdown a").getAttribute("href"), "https://example.com");
   assert.match(ui.query(".chat-markdown pre").textContent, /<script>/);
   assert.equal(ui.document.querySelector(".chat-markdown script"), null);
+});
+
+test("assistant file references open the workspace preview and emphasis is highlighted", t => {
+  const ui = page(t);
+  ui.receive({ type:"ui-state", state:baseState({ activeConversationId:"c1" }) });
+  ui.receive({ type:"gateway-chat-started", requestId:"file-link", prompt:"检查文件", cancellable:true });
+  ui.receive({ type:"gateway-chat-response", requestId:"file-link", success:true,
+    response:"请查看 [README.md](README.md)，重点是 ==这一段==，代码文件是 `src/App.cs`，外链 [站点](https://example.com)。" });
+  assert.equal(ui.query(".chat-markdown mark").textContent, "这一段");
+  assert.equal(ui.queryAll ? ui.queryAll(".chat-markdown .file-link").length : ui.document.querySelectorAll(".chat-markdown .file-link").length, 2);
+  assert.equal(ui.query(".chat-markdown a:not(.file-link)").getAttribute("href"), "https://example.com");
+  ui.query(".chat-markdown .file-link").click();
+  const request = ui.messages.filter(message => message.type === "read-workspace-file").at(-1);
+  assert.equal(request.root, "C://Work//Alpha");
+  assert.equal(request.path, "C:\\Work\\Alpha\\README.md");
+  ui.receive({ type:"workspace-file", path:request.path, requestId:request.requestId, kind:"text", content:"preview" });
+  assert.equal(ui.query("#filesPreviewText").textContent, "preview");
+  assert.equal(ui.query("#filesPanel").hidden, false);
+});
+
+test("subagent lifecycle is tracked in the conversation tree and files panel", t => {
+  const ui = page(t);
+  ui.receive({ type:"ui-state", state:baseState({ activeConversationId:"c1" }) });
+  ui.receive({ type:"gateway-chat-started", requestId:"agents", prompt:"拆分检查", cancellable:true });
+  ui.receive({ type:"subagent-update", requestId:"agents", conversationId:"c1", agentId:"agent-123456", task:"检查日志", status:"running" });
+  assert.match(ui.query(".node--subagent").textContent, /检查日志/);
+  assert.match(ui.query(".node--subagent__status").textContent, /运行中/);
+  ui.query("#filesPanelToggle").click();
+  ui.query("#filesTraceToggle").click();
+  assert.match(ui.query("#subagentTrace").textContent, /检查日志/);
+  ui.receive({ type:"subagent-update", requestId:"agents", conversationId:"c1", agentId:"agent-123456", task:"检查日志", status:"completed", result:"发现 2 个告警" });
+  assert.match(ui.query("#subagentTrace").textContent, /发现 2 个告警/);
+  assert.match(ui.query("#subagentTrace").textContent, /已完成/);
 });
 
 test("command executor panels preserve output, status and history without extra controls", t => {
@@ -1405,11 +2141,16 @@ test("conversation tree persists fork ancestry and can collapse descendants", t 
   ui.query("#sessionViewBtn").click();
   [...ui.query("#convMenu").querySelectorAll(".context-menu__item")].find(node => node.textContent.includes("按对话树")).click();
   assert.ok(ui.query('[data-branch="c1"]'));
-  assert.ok(ui.query('[data-branch="' + fork.id + '"]'));
+  assert.equal(ui.document.querySelector('[data-branch="' + fork.id + '"]'), null,
+    "forked branches stay collapsed until the user expands them");
+  ui.query('[data-branch="c1"] .conversation-branch__toggle').click();
+  assert.ok(ui.query('[data-branch="' + fork.id + '"]'), "expanding the ancestor shows the fork");
+  saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
+  assert.equal(saved.expanded["conversation:c1"], true, "the expanded branch is persisted");
+  assert.equal(saved.view.grouping, "conversation");
   ui.query('[data-branch="c1"] .conversation-branch__toggle').click();
   assert.equal(ui.document.querySelector('[data-branch="' + fork.id + '"]'), null);
   saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
-  assert.equal(saved.view.grouping, "conversation");
   ui.receive({ type: "ui-state", state: saved });
   assert.equal(ui.messages.filter(message => message.type === "save-state").at(-1).state.conversations.find(item => item.id === fork.id).parentId, "c1");
 });
@@ -1450,11 +2191,12 @@ test("editing rolls back the current conversation without a branch", t => {
   const ui = page(t);
   const conversation = baseState().conversations[0];
   conversation.messages = [{ role:"user", text:"问题一" }, { role:"agent", text:"回答一" },
-    { role:"user", text:"问题二" }, { role:"agent", text:"原回答二" }];
+    { role:"user", text:"问题二", worktreeCommit:"a".repeat(40), worktreeRoot:"C:/Work/Alpha/.remotecli/worktrees/thread" }, { role:"agent", text:"原回答二" }];
   const settings = { relay:relayBaseUrl, replySource:"gateway", gatewayUrl:"https://gateway.example/v1", models:["model"], defaultModel:"model", tools:[] };
   ui.receive({ type:"ui-state", state:baseState({ conversations:[conversation], settings, activeConversationId:"c1" }) });
   ui.query('[data-turn-index="2"] [aria-label="编辑并回退到此消息"]').click();
   assert.equal(ui.query("#editTurnText").value, "问题二");
+  ui.query("#editTurnWorkspace").checked = false;
   ui.query("#editTurnText").value = "修改后的问题二";
   ui.query("#editTurnApply").click();
   ui.query("#confirmOkBtn").click();
@@ -1467,50 +2209,64 @@ test("editing rolls back the current conversation without a branch", t => {
   const request = ui.messages.filter(message => message.type === "gateway-chat-request").at(-1);
   assert.equal(request.conversationId, "c1");
   assert.deepEqual(request.messages.map(message => message.content), ["问题一", "回答一", "修改后的问题二"]);
-  ui.receive({ type:"gateway-chat-started", requestId:request.requestId, prompt:request.prompt, checkpointId:"a".repeat(32), cancellable:true });
+  ui.receive({ type:"gateway-chat-started", requestId:request.requestId, prompt:request.prompt, worktreeCommit:"a".repeat(32), cancellable:true });
   saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
-  assert.equal(saved.conversations.find(item => item.id === "c1").messages.at(-1).checkpointId, "a".repeat(32));
+  assert.equal(saved.conversations.find(item => item.id === "c1").messages.at(-1).worktreeCommit, "a".repeat(32));
   assert.equal(saved.conversations.find(item => item.id === "c1").editingDraft, false);
 });
 
 test("combined rollback previews workspace and deletes later chat only after success", t => {
   const ui = page(t);
   const conversation = baseState().conversations[0];
-  conversation.messages[0].checkpointId = "a".repeat(32);
+  conversation.messages[0].worktreeCommit = "a".repeat(40);
+  conversation.messages[0].worktreeRoot = "C:/Work/Alpha/.remotecli/worktrees/old";
   ui.receive({ type:"ui-state", state:baseState({ conversations:[conversation], activeConversationId:"c1" }) });
   ui.query('[data-turn-index="0"] [aria-label="编辑并回退到此消息"]').click();
   assert.equal(ui.query("#editTurnWorkspace").checked, true);
   ui.query("#editTurnText").value = "修改后";
   ui.query("#editTurnApply").click();
-  const preview = ui.messages.filter(message => message.type === "checkpoint-preview").at(-1);
-  assert.equal(preview.checkpointId, "a".repeat(32));
-  ui.receive({ type:"checkpoint-preview", requestId:preview.requestId, success:true, fingerprint:"abc", added:1, changed:1, removed:0, directoryChanges:0,
+  const preview = ui.messages.filter(message => message.type === "worktree-preview").at(-1);
+  assert.equal(preview.worktreeCommit, "a".repeat(40));
+  assert.equal(preview.conversationId,"c1");
+  ui.receive({ type:"worktree-preview", requestId:preview.requestId, success:true, fingerprint:"abc", added:1, changed:1, removed:0, directoryChanges:0,
     changes:["将删除：new.txt", "将还原：old.txt"] });
   assert.equal(ui.query("#confirmTitle").textContent, "回退对话与工作区");
   assert.match(ui.query("#confirmText").textContent, /new\.txt/);
-  assert.equal(ui.messages.some(message => message.type === "checkpoint-restore"), false);
+  assert.equal(ui.messages.some(message => message.type === "worktree-restore"), false);
   ui.query("#confirmOkBtn").click();
-  const restore = ui.messages.filter(message => message.type === "checkpoint-restore").at(-1);
+  const restore = ui.messages.filter(message => message.type === "worktree-restore").at(-1);
   assert.equal(restore.fingerprint, "abc");
   assert.ok(ui.document.querySelector('[data-turn-index="0"]'), "chat stays intact until workspace restore succeeds");
-  ui.receive({ type:"checkpoint-restored", requestId:restore.requestId, success:true, backupId:"b".repeat(32) });
+  ui.receive({ type:"worktree-restored", requestId:restore.requestId, success:true, worktreeRoot:"C:/Work/Alpha/.remotecli/worktrees/restored", previousWorktreeRoot:"C:/Work/Alpha/.remotecli/worktrees/old", branch:"codex/restored", head:"a".repeat(40) });
   assert.equal(ui.messages.filter(message => message.type === "save-state").at(-1).state.conversations[0].messages.length, 0);
   assert.equal(ui.query("#terminalInput").value, "修改后");
   assert.equal(ui.messages.filter(message => message.type === "save-state").at(-1).state.conversations.length, 1);
 });
 
-test("checkpoint capture is shown while waiting and attaches to the correct message", t => {
-  const ui = page(t);
-  ui.receive({ type:"ui-state", state:baseState({ activeConversationId:"c1" }) });
-  ui.receive({ type:"gateway-chat-started", requestId:"capture", prompt:"检查", checkpointPending:true, cancellable:true });
-  assert.match(ui.query(".terminal-loading").textContent, /保存工作区快照/);
-  const turn = [...ui.document.querySelectorAll(".turn:not(.turn--bare)")].at(-1);
-  assert.equal(turn.querySelectorAll(".turn__ask-action").length, 1);
-  ui.receive({ type:"checkpoint-captured", requestId:"other", checkpointId:"b".repeat(32) });
-  ui.receive({ type:"checkpoint-captured", requestId:"capture", checkpointId:"a".repeat(32) });
-  assert.match(ui.query(".terminal-loading").textContent, /生成回复/);
-  const saved = ui.messages.filter(message => message.type === "save-state").at(-1).state;
-  assert.equal(saved.conversations[0].messages.at(-1).checkpointId, "a".repeat(32));
+test("native worktree readiness enables supported nodes and uses the actual worktree for files", t => {
+  const ui=page(t);ui.receive({type:"ui-state",state:baseState({activeConversationId:"c1"})});
+  ui.receive({type:"gateway-chat-started",requestId:"worktree",prompt:"检查",cancellable:true});
+  const action=()=>[...ui.document.querySelectorAll(".turn__ask-action")].at(-1);
+  assert.equal(action().disabled,true,"no Git commit means unsupported and grey");
+  assert.doesNotMatch(ui.query(".terminal-loading").textContent,/快照|保存工作区/);
+  ui.receive({type:"worktree-ready",requestId:"worktree",conversationId:"c1",worktreeRoot:"C:/Work/Alpha/.remotecli/worktrees/thread",branch:"codex/thread",worktreeCommit:"a".repeat(40)});
+  assert.equal(action().disabled,false);
+  assert.match(ui.query("#topbarWorkspace").textContent,/remotecli.*worktrees/);
+  ui.query("#filesToggle").click();
+  assert.equal(ui.messages.filter(message=>message.type==="list-workspace-files").at(-1).root,"C:/Work/Alpha/.remotecli/worktrees/thread");
+  ui.receive({type:"worktree-started",requestId:"worktree"});
+  assert.match(ui.query(".terminal-loading").textContent,/Git/);
+  ui.receive({type:"worktree-committed",requestId:"other",worktreeCommit:"b".repeat(40)});
+  ui.receive({type:"worktree-committed",requestId:"worktree",worktreeCommit:"c".repeat(40)});
+  assert.equal(lastSavedState(ui).conversations[0].messages.at(-1).worktreeCommit,"c".repeat(40));
+});
+
+test("old or unsupported rollback nodes stay disabled and do not open the dialog", t => {
+  const ui=page(t), snapshot=baseState({activeConversationId:"c1"});
+  snapshot.conversations[0].messages[0].checkpointId="a".repeat(32);
+  ui.receive({type:"ui-state",state:snapshot});
+  const button=ui.query(".turn__ask-action"); assert.equal(button.disabled,true); assert.equal(button.getAttribute("aria-disabled"),"true");
+  button.click();assert.equal(ui.query("#editTurnScrim").hidden,true);
 });
 
 test("MCP configuration is validated, persisted and passed to the gateway", t => {
@@ -1823,4 +2579,553 @@ test("deleting a conversation disposes its terminal panel and closes the gateway
   assert.deepEqual(ui.messages.filter(message => message.type === "gateway-session-close"), [{ type: "gateway-session-close", conversationId: "c1" }]);
   const saved = ui.messages.filter(message => message.type === "save-state").at(-1);
   assert.equal(saved.state.conversations.some(conversation => conversation.id === "c1"), false);
+});
+
+test("code highlight plugin installs from a local package and toggles in settings", t => {
+  const ui = page(t);
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "office-preview", installed: false }, { id: "code-highlight", installed: false }] });
+  ui.query("#accountBtn").click();
+  ui.query('[data-settings-pane="tools"]').click();
+
+  const stateEl = ui.query("#pluginState-code-highlight");
+  const button = ui.query("#pluginToggle-code-highlight");
+  assert.equal(stateEl.textContent, "未安装");
+  assert.equal(button.textContent, "安装");
+
+  button.click();
+  assert.deepEqual(ui.messages.at(-1), { type: "install-plugin", id: "code-highlight" });
+  assert.equal(button.textContent, "取消");
+  assert.equal(button.classList.contains("is-danger"), true);
+  ui.receive({ type: "plugin-status", id: "code-highlight", state: "installing", phase: "download", percent: 12 });
+  assert.equal(stateEl.textContent, "正在下载代码高亮插件… 12%");
+
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "code-highlight", installed: true }] });
+  assert.equal(stateEl.textContent, "已安装");
+  assert.equal(button.textContent, "卸载");
+  assert.equal(button.disabled, false);
+
+  ui.query("#pluginInstallFromFile").click();
+  assert.deepEqual(ui.messages.at(-1), { type: "install-plugin-file", id: "code-highlight" });
+
+  button.click();
+  assert.deepEqual(ui.messages.at(-1), { type: "uninstall-plugin", id: "code-highlight" });
+  assert.equal(stateEl.textContent, "正在卸载代码高亮插件…");
+});
+
+test("code highlighting colors completed chat blocks, stays plain while streaming, and falls back when removed", t => {
+  const ui = page(t);
+  const window = ui.document.defaultView;
+  window.LongShellPlugins = { "code-highlight": { api: 1, version: "test", highlight(code, label) {
+    return { language: label, lines: code.split("\n").map(line => [{ text: line, color: "#ff0000", fontStyle: 0 }]) };
+  } } };
+  window.document.dispatchEvent(new window.CustomEvent("longshell-plugin-ready", { detail: { id: "code-highlight" } }));
+
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.receive({ type: "gateway-chat-started", requestId: "hl", prompt: "写点代码", cancellable: true });
+  const text = "```ts\nconst x = 1;\n```";
+  ui.receive({ type: "gateway-chat-delta", requestId: "hl", text });
+  let code = ui.query(".chat-markdown pre code");
+  assert.equal(code.textContent, "const x = 1;");
+  assert.equal(code.dataset.highlighted, undefined, "streaming code blocks stay plain");
+
+  ui.receive({ type: "gateway-chat-response", requestId: "hl", success: true, response: text });
+  code = ui.query(".chat-markdown pre code");
+  assert.equal(code.dataset.highlighted, "done");
+  assert.equal(code.querySelectorAll("span").length, 1);
+  assert.match(code.querySelector("span").getAttribute("style"), /color:\s*(#ff0000|rgb\(255, 0, 0\))/);
+
+  ui.receive({ type: "plugin-settings", plugins: [{ id: "code-highlight", installed: false }] });
+  code = ui.query(".chat-markdown pre code");
+  assert.equal(code.textContent, "const x = 1;");
+  assert.equal(code.querySelectorAll("span").length, 0, "uninstalling the plugin falls back to plain text");
+});
+
+test("text preview pages by line with gutter, wrap, retry and end state", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.query("#filesToggle").click();
+  const list = ui.messages.at(-1);
+  ui.receive({
+    type: "workspace-files", path: "C://Work//Alpha", requestId: list.requestId,
+    entries: [{ name: "big.log", path: "C://Work//Alpha//big.log", isDirectory: false, size: 42 }]
+  });
+  ui.query(".file-row").click();
+  const read = ui.messages.at(-1);
+  ui.receive({
+    type: "workspace-file", path: "C://Work//Alpha//big.log", requestId: read.requestId,
+    kind: "text", content: "line 1\nline 2", offset: 1, lines: 2, eof: false, version: "10:1"
+  });
+  assert.equal(ui.query("#filesPreviewText").textContent, "line 1\nline 2");
+  assert.equal(ui.query("#filesPreviewReader").hidden, false);
+  assert.equal(ui.document.querySelectorAll("#filesPreviewLines .files-line").length, 2);
+  assert.equal(ui.query("#filesPreviewLines .files-line__no").textContent, "1");
+  assert.match(ui.query("#filesPreviewReaderStatus").textContent, /已加载 2 行/);
+  assert.equal(ui.query("#filesPreviewReaderFoot").hidden, false);
+
+  ui.query("#filesPreview").dispatchEvent(new ui.document.defaultView.Event("scroll"));
+  const pageRequest = ui.messages.at(-1);
+  assert.equal(pageRequest.type, "read-text-page");
+  assert.equal(pageRequest.offset, 3);
+  assert.equal(pageRequest.limit, 2000);
+  assert.equal(pageRequest.root, "C://Work//Alpha");
+
+  ui.receive({ type: "text-page", path: "C://Work//Alpha//big.log", requestId: pageRequest.requestId, error: "读取失败，请重试。" });
+  assert.equal(ui.query("#filesPreviewReaderStatus").textContent, "读取失败，请重试。");
+  assert.equal(ui.query("#filesPreviewMoreBtn").textContent, "重试");
+
+  ui.query("#filesPreviewMoreBtn").click();
+  const retry = ui.messages.at(-1);
+  assert.equal(retry.type, "read-text-page");
+  assert.equal(retry.offset, 3);
+  ui.receive({
+    type: "text-page", path: "C://Work//Alpha//big.log", requestId: retry.requestId,
+    offset: 3, lines: 1, content: "line 3", eof: true, version: "10:1"
+  });
+  assert.equal(ui.document.querySelectorAll("#filesPreviewLines .files-line").length, 3);
+  assert.equal(ui.query("#filesPreviewLines .files-line:last-child .files-line__no").textContent, "3");
+  assert.match(ui.query("#filesPreviewReaderStatus").textContent, /已到末尾/);
+  assert.equal(ui.query("#filesPreviewReaderFoot").hidden, true);
+
+  ui.query("#filesPreviewWrapBtn").click();
+  assert.equal(ui.query("#filesPreviewLines").classList.contains("is-wrap"), true);
+  assert.equal(ui.query("#filesPreviewWrapBtn").getAttribute("aria-pressed"), "true");
+});
+
+test("html previews are sandboxed and http links open the built-in browser", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.query("#browserToggle").click();
+  assert.deepEqual(ui.messages.at(-1), { type: "open-browser" });
+
+  ui.query("#filesToggle").click();
+  const list = ui.messages.at(-1);
+  ui.receive({
+    type: "workspace-files", path: "C://Work//Alpha", requestId: list.requestId,
+    entries: [{ name: "a.html", path: "C://Work//Alpha//a.html", isDirectory: false, size: 210 }]
+  });
+  ui.query(".file-row").click();
+  const read = ui.messages.at(-1);
+  ui.receive({
+    type: "workspace-file", path: "C://Work//Alpha//a.html", requestId: read.requestId, kind: "html",
+    content: "<html><head><script>alert(1)</script><base href=\"https://evil.example/\"></head>" +
+      "<body onload=\"alert(2)\"><a href=\"https://example.com\">x</a>" +
+      "<img src=\"data:image/png;base64,AA\"><img src=\"https://evil.example/x.png\"></body></html>"
+  });
+  const frame = ui.query("#filesPreviewHtml");
+  assert.equal(frame.hidden, false);
+  assert.equal(frame.getAttribute("sandbox"), "");
+  assert.match(frame.srcdoc, /Content-Security-Policy/);
+  assert.doesNotMatch(frame.srcdoc, /<script|alert\(1\)|base href/i);
+  assert.doesNotMatch(frame.srcdoc, /https:\/\/evil\.example/);
+  assert.match(frame.srcdoc, /data:image\/png/);
+
+  ui.receive({ type: "gateway-chat-started", requestId: "link", prompt: "看这里", cancellable: true });
+  ui.receive({ type: "gateway-chat-response", requestId: "link", success: true, response: "[站点](https://example.com)" });
+  ui.query(".chat-markdown a").click();
+  assert.deepEqual(ui.messages.at(-1), { type: "open-browser", url: "https://example.com" });
+});
+
+function gatewayState(settingsExtra = {}) {
+  return baseState({
+    activeConversationId: "c1",
+    settings: {
+      relay: relayBaseUrl, replySource: "gateway", gatewayUrl: "https://gw.example.com/v1", gatewayApiKey: "gw-key",
+      backend: "openai", models: ["model-a"], defaultModel: "model-a", ...settingsExtra
+    }
+  });
+}
+
+function lastSavedState(ui) {
+  return ui.messages.filter(message => message.type === "save-state").at(-1).state;
+}
+
+test("provider edits survive settings save and selecting another provider never copies old credentials", t => {
+  const ui = page(t);
+  const providers = [
+    {id:"a",name:"A",baseUrl:"https://a.example/v1",apiKey:"dummy-a",backend:"openai",enabled:true},
+    {id:"b",name:"B",baseUrl:"https://b.example/v1",apiKey:"dummy-b",backend:"anthropic",enabled:true}
+  ];
+  ui.receive({type:"ui-state",state:gatewayState({providers,activeProviderId:"a",gatewayUrl:providers[0].baseUrl,gatewayApiKey:providers[0].apiKey})});
+  ui.query("#accountBtn").click();
+  const edit = (selector,value) => {
+    const input=ui.query(selector); input.value=value;
+    input.dispatchEvent(new ui.document.defaultView.Event("change",{bubbles:true}));
+  };
+  edit('[data-provider-id="a"] .provider-row__url',"https://edited.example/v1");
+  edit('[data-provider-id="a"] .provider-row__key',"dummy-edited");
+  edit('[data-provider-id="a"] .provider-row__backend',"azure");
+  ui.query("#settingsSaveBtn").click();
+  let saved=lastSavedState(ui);
+  assert.equal(saved.settings.providers[0].baseUrl,"https://edited.example/v1");
+  assert.equal(saved.settings.providers[0].apiKey,"dummy-edited");
+  assert.equal(saved.settings.providers[0].backend,"azure");
+  ui.receive({type:"ui-state",state:saved}); ui.query("#accountBtn").click();
+  ui.query('[data-provider-id="b"] .provider-row__use').click();
+  ui.query("#settingsSaveBtn").click(); saved=lastSavedState(ui);
+  assert.deepEqual(saved.settings.providers[1],providers[1]);
+  ui.receive({type:"ui-state",state:saved}); ui.query("#accountBtn").click();
+  ui.query('[data-provider-id="b"] .provider-row__remove').click();
+  ui.query("#settingsSaveBtn").click(); saved=lastSavedState(ui);
+  assert.equal(saved.settings.providers.length,1);
+  assert.equal(saved.settings.providers[0].apiKey,"dummy-edited");
+});
+
+function sendGatewayText(ui,text){
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query("#terminalInput").value=text;
+  ui.query("#terminalInput").dispatchEvent(new ui.document.defaultView.Event("input",{bubbles:true}));
+  ui.query("#terminalSendBtn").click();
+  return ui.messages.filter(message=>message.type==="gateway-chat-request").at(-1);
+}
+
+test("gateway bootstrap retains early constraints beyond twenty messages", t => {
+  const ui=page(t), snapshot=gatewayState();
+  snapshot.conversations[0].messages=Array.from({length:30},(_,i)=>({role:i%2?"agent":"user",text:i===0?"EARLY_CONSTRAINT":"message "+i,at:i+1}));
+  ui.receive({type:"ui-state",state:snapshot});
+  const request=sendGatewayText(ui,"continue");
+  assert.equal(request.messages.length,31);
+  assert.equal(request.messages[0].content,"EARLY_CONSTRAINT");
+});
+
+test("gateway history revision carries compacted backend context across turns and reload", t => {
+  const ui=page(t);ui.receive({type:"ui-state",state:gatewayState()});
+  ui.receive({type:"gateway-chat-started",requestId:"first",prompt:"start"});
+  ui.receive({type:"context-compression-started",requestId:"first",removedMessages:10,keptMessages:6});
+  ui.receive({type:"context-compression-finished",requestId:"first",removedMessages:10,tokensBefore:90000,tokensAfter:10000,summary:"PRIVATE_SUMMARY",changes:[]});
+  ui.receive({type:"gateway-chat-response",requestId:"first",success:true,response:"done",historyRevision:"revision-one"});
+  let request=sendGatewayText(ui,"next");
+  assert.equal(request.historyRevision,"revision-one");
+  assert.equal(request.messages.length,1,"backend revision supplies the previous history");
+  assert.doesNotMatch(ui.query("#terminalThread").textContent,/PRIVATE_SUMMARY/);
+  ui.receive({type:"gateway-chat-started",requestId:request.requestId,prompt:"next"});
+  ui.receive({type:"gateway-chat-response",requestId:request.requestId,success:true,response:"next done",historyRevision:"revision-two"});
+  ui.receive({type:"ui-state",state:lastSavedState(ui)});
+  request=sendGatewayText(ui,"after reload");
+  assert.equal(request.historyRevision,"revision-two");
+  assert.equal(request.messages.length,1);
+});
+
+test("gateway history mismatch retries from full UI history instead of losing old context", t => {
+  const ui=page(t), snapshot=gatewayState();
+  snapshot.conversations[0].gatewayHistoryRevision="missing";
+  snapshot.conversations[0].gatewayHistoryMessageCount=snapshot.conversations[0].messages.length;
+  ui.receive({type:"ui-state",state:snapshot});
+  const request=sendGatewayText(ui,"retry me");
+  ui.receive({type:"gateway-chat-response",requestId:request.requestId,success:false,resetHistory:true,error:"历史不可用，请重试"});
+  const next=sendGatewayText(ui,"retry me");
+  assert.equal(next.historyRevision,"");
+  assert.ok(next.messages.length>1);
+  assert.match(next.messages[0].content,/ssh/);
+});
+
+test("executing a plan from Q&A uses execution tools and tracks backend acceptance failure and retry", t => {
+  const ui=page(t);ui.receive({type:"ui-state",state:gatewayState({globalTools:["write_file"]})});
+  ui.receive({type:"gateway-chat-started",requestId:"proposal",prompt:"plan"});
+  ui.receive({type:"plan-proposed",requestId:"proposal",planId:"plan",planHash:"hash",title:"Implement",markdown:"change file"});
+  ui.receive({type:"gateway-chat-response",requestId:"proposal",success:true,response:"ready"});
+  ui.query("#composerQaBtn").click(); ui.query("#planExecuteBtn").click();
+  let request=ui.messages.filter(message=>message.type==="gateway-chat-request").at(-1);
+  const plan=()=>lastSavedState(ui).conversations[0].messages.find(message=>message.role==="plan");
+  assert.equal(request.composerMode,"default"); assert.ok(request.enabledTools.includes("write_file"));
+  assert.equal(request.planHash,"hash"); assert.equal(plan().status,"submitting");
+  ui.receive({type:"plan-execution-accepted",requestId:request.requestId,planId:"plan"});
+  assert.equal(plan().status,"running");
+  ui.receive({type:"gateway-chat-response",requestId:request.requestId,success:false,error:"validation failed"});
+  assert.equal(plan().status,"failed");
+  ui.query(".plan-card__execute").click(); assert.equal(plan().status,"pending");
+  ui.query("#planExecuteBtn").click(); request=ui.messages.filter(message=>message.type==="gateway-chat-request").at(-1);
+  ui.receive({type:"gateway-chat-started",requestId:request.requestId,prompt:"execute"});
+  ui.receive({type:"plan-execution-accepted",requestId:request.requestId,planId:"plan"});
+  ui.receive({type:"gateway-chat-response",requestId:request.requestId,success:true,response:"implemented"});
+  assert.equal(plan().status,"succeeded");
+});
+
+test("automatic approval tier survives UI state reload", t => {
+  const ui=page(t), snapshot=gatewayState();snapshot.composer={approval:"auto",tier:"high",mode:"default"};
+  ui.receive({type:"ui-state",state:snapshot});
+  ui.query("#accountBtn").click();ui.query("#settingsSaveBtn").click();
+  let saved=lastSavedState(ui);assert.equal(saved.composer.approval,"auto");assert.equal(saved.composer.tier,"high");
+  ui.receive({type:"ui-state",state:saved});ui.query("#accountBtn").click();ui.query("#settingsSaveBtn").click();
+  saved=lastSavedState(ui);assert.equal(saved.composer.approval,"auto");assert.equal(saved.composer.tier,"high");
+});
+
+test("interrupted plan execution becomes retryable after reload", t => {
+  const ui=page(t), snapshot=gatewayState();
+  snapshot.conversations[0].messages.push({role:"plan",planId:"interrupted",title:"Plan",markdown:"steps",status:"running",at:2});
+  ui.receive({type:"ui-state",state:snapshot});
+  assert.equal(ui.query(".plan-card__execute").disabled,false);
+  ui.query(".plan-card__execute").click();
+  assert.equal(lastSavedState(ui).conversations[0].messages.find(message=>message.role==="plan").status,"pending");
+});
+
+test("waiting and thinking retain the horizontal glow and disappear when output starts", t => {
+  const ui=page(t);ui.receive({type:"ui-state",state:baseState({activeConversationId:"c1"})});
+  ui.receive({type:"gateway-chat-started",requestId:"glow",prompt:"整理日志",cancellable:true});
+  const loading=ui.query("#terminalThread > .terminal-loading");
+  assert.equal(loading.getAttribute("role"),"status");assert.equal(loading.getAttribute("aria-live"),"polite");
+  assert.equal(loading.querySelector(".terminal-loading__orb").getAttribute("aria-hidden"),"true");
+  assert.equal(loading.querySelector(".terminal-loading__caption").textContent,"正在等待模型响应");
+  assert.equal(loading.querySelector(".terminal-loading__ring"),null);
+  assert.match(html,/prefers-reduced-motion:reduce.*terminal-loading__orb/);
+  ui.receive({type:"gateway-chat-delta",requestId:"glow",kind:"reasoning",text:"先看文件"});
+  assert.equal(ui.query(".terminal-loading__caption").textContent,"正在思考");
+  assert.equal(ui.query(".terminal-loading"),loading);
+  ui.receive({type:"gateway-chat-delta",requestId:"glow",kind:"text",text:"看完了"});
+  assert.equal(ui.document.querySelector(".terminal-loading"),null);
+  ui.receive({type:"gateway-chat-response",requestId:"glow",success:true,response:"看完了"});
+  assert.equal(ui.document.querySelector(".terminal-loading"),null);
+});
+
+test("process tree starts collapsed and keeps the user's manual choice across redraws", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.receive({ type: "gateway-chat-started", requestId: "fold", prompt: "检查工作区", cancellable: true });
+  ui.receive({ type: "tool-call", requestId: "fold", callId: "t1", name: "list_files", arguments: "path=." });
+
+  const turn = () => [...ui.document.querySelectorAll("#terminalThread .turn:not(.turn--bare)")].at(-1);
+  const process = () => turn().querySelector(".turn__process");
+  assert.equal(process().hidden, true, "the process is collapsed the first time it appears");
+  assert.equal(turn().querySelector(".turn__toggle").getAttribute("aria-expanded"), "false");
+
+  turn().querySelector(".turn__toggle").click();
+  assert.equal(process().hidden, false, "clicking the toggle opens the process");
+  assert.equal(lastSavedState(ui).conversations[0].messages.filter(message => message.role === "user").at(-1).processOpen, true, "the choice lives on the user message");
+
+  ui.receive({ type: "tool-result", requestId: "fold", callId: "t1", ok: true, result: "a.txt" });
+  ui.receive({ type: "gateway-chat-delta", requestId: "fold", kind: "text", text: "继续" });
+  assert.equal(process().hidden, false, "streaming refreshes no longer force it closed");
+  assert.equal(turn().querySelector(".turn__toggle").getAttribute("aria-expanded"), "true");
+
+  ui.receive({ type: "gateway-chat-response", requestId: "fold", success: true, response: "完成" });
+  assert.equal(process().hidden, false, "completion does not close a process the user opened");
+
+  let saved = lastSavedState(ui);
+  assert.equal(saved.conversations[0].messages.filter(message => message.role === "user").at(-1).processOpen, true, "the expanded choice is saved with ui-state");
+  ui.receive({ type: "ui-state", state: saved });
+  assert.equal(process().hidden, false, "the rebuilt thread restores the expanded process");
+
+  turn().querySelector(".turn__toggle").click();
+  assert.equal(process().hidden, true);
+  ui.receive({ type: "tool-call", requestId: "fold-2", callId: "t2", name: "read_file", arguments: "path=a.txt" });
+  assert.equal(process().hidden, true, "a later redraw does not re-open a process the user closed");
+  saved = lastSavedState(ui);
+  assert.equal(saved.conversations[0].messages.filter(message => message.role === "user").at(-1).processOpen, false, "the collapsed choice is saved as well");
+  ui.receive({ type: "ui-state", state: saved });
+  assert.equal(process().hidden, true, "the collapsed choice survives a restart");
+});
+
+test("action groups stay collapsed by default and remember a manual expansion", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: baseState({ activeConversationId: "c1" }) });
+  ui.receive({ type: "gateway-chat-started", requestId: "group", prompt: "跑命令", cancellable: true });
+  ui.receive({ type: "tool-call", requestId: "group", callId: "g1", name: "list_files", arguments: "path=." });
+
+  const processOf = () => [...ui.document.querySelectorAll("#terminalThread .turn:not(.turn--bare)")].at(-1).querySelector(".turn__process");
+  const head = () => processOf().querySelector(".action-group__head");
+  assert.equal(head().getAttribute("aria-expanded"), "false", "action groups start collapsed while streaming");
+
+  [...ui.document.querySelectorAll("#terminalThread .turn:not(.turn--bare)")].at(-1).querySelector(".turn__toggle").click();
+  head().click();
+  assert.equal(head().getAttribute("aria-expanded"), "true");
+  assert.equal(lastSavedState(ui).conversations[0].messages.find(message => message.role === "tool").actionOpen, true, "the manual choice is stored on the message");
+
+  const saved = lastSavedState(ui);
+  ui.receive({ type: "ui-state", state: saved });
+  assert.equal(head().getAttribute("aria-expanded"), "true", "the rebuilt thread keeps the action group open");
+});
+
+test("gateway providers validate, persist, and only ticked providers rotate", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: gatewayState() });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.query("#accountBtn").click();
+
+  const rows = () => [...ui.document.querySelectorAll("#providerList .provider-row")];
+  const fire = (element, type) => element.dispatchEvent(new ui.document.defaultView.Event(type, { bubbles: true }));
+  // 迁移：providers 为空但已有 gatewayUrl 时自动生成“自定义网关”。
+  assert.equal(rows().length, 1);
+  assert.equal(rows()[0].querySelector(".provider-row__name").value, "自定义网关");
+  assert.equal(rows()[0].querySelector(".provider-row__enabled").checked, true);
+  assert.equal(rows()[0].querySelector(".provider-row__badge").textContent, "当前供应商");
+  assert.equal(rows()[0].querySelector(".provider-row__key").type, "password");
+
+  ui.query("#providerAddBtn").click();
+  assert.equal(rows().length, 2);
+  const rename = value => {
+    const name = rows()[1].querySelector(".provider-row__name");
+    name.value = value;
+    fire(name, "change");
+  };
+  const setUrl = value => {
+    const url = rows()[1].querySelector(".provider-row__url");
+    url.value = value;
+    fire(url, "change");
+  };
+  rename("备用网关");
+  setUrl("http://insecure.example.com/v1");
+  assert.equal(rows()[1].querySelector(".provider-row__error").hidden, false, "http addresses outside loopback are rejected");
+  assert.equal(rows()[1].querySelector(".provider-row__url").value, "", "a rejected address is not written");
+  setUrl("https://backup.example.com/v1");
+  assert.equal(rows()[1].querySelector(".provider-row__error").hidden, true);
+  assert.equal(rows()[1].querySelector(".provider-row__enabled").checked, false, "a new provider joins no rotation yet");
+  rows()[1].querySelector(".provider-row__key").value = "backup-key";
+  fire(rows()[1].querySelector(".provider-row__key"), "change");
+  rows()[1].querySelector(".provider-row__backend").value = "anthropic";
+  fire(rows()[1].querySelector(".provider-row__backend"), "change");
+
+  ui.query("#settingsSaveBtn").click();
+  let saved = lastSavedState(ui);
+  assert.equal(saved.settings.providers.length, 2, "both providers are written back");
+  assert.deepEqual(saved.settings.providers.map(provider => provider.name), ["自定义网关", "备用网关"]);
+  assert.equal(saved.settings.providers.filter(provider => provider.enabled).length, 1);
+  assert.equal(saved.settings.gatewayUrl, "https://gw.example.com/v1", "the current provider is mirrored to the legacy fields");
+
+  let chip = ui.query("#providerChip");
+  assert.equal(chip.hidden, false, "the chip shows in gateway mode");
+  assert.equal(chip.textContent, "自定义网关");
+  assert.equal(chip.disabled, true, "one rotating provider cannot cycle");
+
+  // 勾选第二个供应商后 chip 可以轮换。
+  ui.query("#accountBtn").click();
+  const toggle = rows()[1].querySelector(".provider-row__enabled");
+  toggle.checked = true;
+  fire(toggle, "change");
+  ui.query("#settingsSaveBtn").click();
+  chip = ui.query("#providerChip");
+  assert.equal(chip.disabled, false);
+  chip.click();
+  chip = ui.query("#providerChip");
+  assert.equal(chip.textContent, "备用网关", "clicking the chip moves to the next rotating provider");
+  assert.equal(lastSavedState(ui).settings.gatewayUrl, "https://backup.example.com/v1", "cycling mirrors the new provider");
+  assert.ok(ui.document.querySelector(".toast"), "cycling reports a toast");
+  chip.click();
+  assert.equal(ui.query("#providerChip").textContent, "自定义网关");
+
+  // 取消勾选后不再进入轮换。
+  ui.query("#accountBtn").click();
+  const second = rows()[1].querySelector(".provider-row__enabled");
+  second.checked = false;
+  fire(second, "change");
+  ui.query("#settingsSaveBtn").click();
+  chip = ui.query("#providerChip");
+  assert.equal(chip.disabled, true, "the unticked provider leaves the rotation");
+  assert.equal(chip.textContent, "自定义网关");
+  chip.click();
+  assert.equal(ui.query("#providerChip").textContent, "自定义网关", "an unticked provider is never cycled to");
+  saved = lastSavedState(ui);
+  assert.equal(saved.settings.providers.filter(provider => provider.enabled).length, 1);
+});
+
+test("plan cards stay readable and the plan bar executes, cancels and reopens them", t => {
+  const ui = page(t);
+  ui.receive({ type: "ui-state", state: gatewayState() });
+  ui.query('[data-page-pill="terminal"]').click();
+  ui.receive({ type: "gateway-chat-started", requestId: "plan-run", prompt: "规划重构", cancellable: true });
+  ui.receive({
+    type: "plan-proposed", requestId: "plan-run", planId: "p1", title: "重构计划",
+    markdown: "1. 拆分模块\n2. 补测试", path: "C:////plans////p1.md"
+  });
+
+  const card = () => ui.query("#terminalThread .plan-card");
+  const planMessage = () => lastSavedState(ui).conversations[0].messages.find(message => message.role === "plan");
+  assert.equal(card().closest(".turn__process"), null, "the plan card lives outside the collapsible process tree");
+  assert.match(card().querySelector(".plan-card__body").textContent, /拆分模块/);
+  assert.equal(card().querySelector(".plan-card__body").hidden, false, "the plan body is expanded by default");
+  assert.equal(ui.query("#planBar").hidden, false, "the plan bar appears with the proposal");
+  assert.match(ui.query("#planBarTitle").textContent, /重构计划/);
+  assert.equal(card().dataset.status, "pending");
+
+  card().querySelector(".plan-card__toggle").click();
+  assert.equal(card().querySelector(".plan-card__body").hidden, true);
+  assert.equal(lastSavedState(ui).collapsed["plan:p1"], true, "the collapse choice is remembered per plan id");
+  card().querySelector(".plan-card__toggle").click();
+  assert.equal(card().querySelector(".plan-card__body").hidden, false);
+
+  ui.receive({ type: "gateway-chat-response", requestId: "plan-run", success: true, response: "计划已给出" });
+  assert.equal(ui.query("#planBar").hidden, false, "the plan bar survives the end of the request");
+
+  // 取消：状态改为 cancelled，执行栏隐藏，卡片保留。
+  ui.query("#planCancelBtn").click();
+  assert.equal(ui.query("#planBar").hidden, true, "cancelling hides the plan bar");
+  assert.ok(ui.query("#terminalThread .plan-card"), "the plan card stays after cancelling");
+  assert.equal(planMessage().status, "cancelled", "cancelling writes the cancelled status");
+  assert.equal(card().dataset.status, "cancelled");
+  assert.equal(ui.messages.filter(message => message.type === "gateway-chat-request").length, 0, "cancelling sends no request");
+  assert.equal(card().querySelector(".plan-card__execute").textContent, "再次执行计划");
+
+  // 卡片上的“再次执行计划”把计划恢复为待执行，执行栏重新出现。
+  card().querySelector(".plan-card__execute").click();
+  assert.equal(planMessage().status, "pending", "reopening restores the pending status");
+  assert.equal(ui.query("#planBar").hidden, false, "reopening brings the plan bar back");
+  assert.equal(ui.messages.filter(message => message.type === "gateway-chat-request").length, 0, "reopening does not execute yet");
+
+  // 执行栏执行：请求带 planId，状态变 approved，执行栏隐藏。
+  ui.query("#planExecuteBtn").click();
+  const request = ui.messages.filter(message => message.type === "gateway-chat-request").at(-1);
+  assert.equal(request.type, "gateway-chat-request");
+  assert.equal(request.planId, "p1", "executing sends the plan id");
+  assert.equal(request.planMode, false);
+  assert.equal(planMessage().status, "submitting", "submission waits for backend validation");
+  assert.equal(ui.query("#planBar").hidden, true, "the plan bar is cleared once the plan is approved");
+  assert.ok(ui.query("#terminalThread .plan-card"), "the approved plan card stays readable");
+  assert.equal(card().querySelector(".plan-card__execute").textContent, "再次执行计划");
+
+  // 重复提交会被拦住。
+  ui.query("#planExecuteBtn").click();
+  assert.equal(ui.messages.filter(message => message.type === "gateway-chat-request").length, 1, "one plan is submitted once");
+});
+
+test("system prompts are configured separately for gateway and remote models", t => {
+  const ui = page(t);
+  const fire = (element, type) => element.dispatchEvent(new ui.document.defaultView.Event(type, { bubbles: true }));
+  ui.receive({ type: "ui-state", state: baseState() });
+  ui.query("#accountBtn").click();
+  assert.equal(ui.query('[data-pane="connection"]').hidden, false, "the prompts live in the connection pane");
+
+  const gateway = ui.query("#gatewaySystemPrompt");
+  const remote = ui.query("#remoteSystemPrompt");
+  assert.equal(gateway.value, "", "no prompt is configured by default");
+  assert.equal(remote.value, "");
+  assert.equal(ui.query("#gatewaySystemPromptCount").textContent, "0 / 8000");
+
+  gateway.value = "网关补充规则";
+  fire(gateway, "input");
+  remote.value = "远端补充规则，安全规则优先。";
+  fire(remote, "input");
+  assert.equal(ui.query("#gatewaySystemPromptCount").textContent, "6 / 8000");
+  assert.equal(ui.query("#remoteSystemPromptCount").textContent, "14 / 8000");
+
+  ui.query("#settingsSaveBtn").click();
+  let saved = lastSavedState(ui);
+  assert.equal(saved.settings.gatewaySystemPrompt, "网关补充规则", "the gateway prompt is written separately");
+  assert.equal(saved.settings.remoteSystemPrompt, "远端补充规则，安全规则优先。", "the remote prompt is written separately");
+
+  // 重启后仍从 ui-state 恢复。
+  ui.receive({ type: "ui-state", state: saved });
+  ui.query("#accountBtn").click();
+  assert.equal(ui.query("#gatewaySystemPrompt").value, "网关补充规则");
+  assert.equal(ui.query("#remoteSystemPrompt").value, "远端补充规则，安全规则优先。");
+
+  // 超过 8000 字符时不保存，设置窗口保持打开。
+  ui.query("#remoteSystemPrompt").value = "x".repeat(8001);
+  fire(ui.query("#remoteSystemPrompt"), "input");
+  assert.ok(ui.query("#remoteSystemPromptCount").classList.contains("is-over"), "the counter marks the overflow");
+  ui.query("#settingsSaveBtn").click();
+  assert.equal(ui.query("#settingsScrim").hidden, false, "an over-limit prompt blocks saving");
+  assert.equal(ui.query("#systemPromptError").hidden, false);
+  assert.match(ui.query("#systemPromptError").textContent, /8000/);
+  assert.equal(lastSavedState(ui).settings.remoteSystemPrompt, "远端补充规则，安全规则优先。", "the stored prompt is untouched");
+
+  // 恢复默认只清空输入框，应用后写回空字符串（使用内置提示）。
+  ui.query("#gatewaySystemPromptReset").click();
+  assert.equal(ui.query("#gatewaySystemPrompt").value, "");
+  assert.equal(ui.query("#gatewaySystemPromptCount").textContent, "0 / 8000");
+  assert.equal(ui.query("#systemPromptError").hidden, true, "restoring clears the overflow message");
+  ui.query("#remoteSystemPrompt").value = "远端补充规则";
+  fire(ui.query("#remoteSystemPrompt"), "input");
+  ui.query("#settingsSaveBtn").click();
+  saved = lastSavedState(ui);
+  assert.equal(saved.settings.gatewaySystemPrompt, "");
+  assert.equal(saved.settings.remoteSystemPrompt, "远端补充规则");
 });

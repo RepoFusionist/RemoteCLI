@@ -113,7 +113,7 @@ internal sealed class GatewayCommandSession(string workspace, Func<string, Cance
 
     internal IReadOnlyList<LocalChatTool> Create() =>
     [
-        new("exec_command", "运行 Windows PowerShell 5.1 命令；tty=true 使用 Windows ConPTY。每次启动前由本机用户审批。工作目录不是沙箱，命令可访问本机和网络。长任务返回 session_id；timeout_ms 默认 120000，范围 1000–3600000。", """{"type":"object","properties":{"cmd":{"type":"string"},"yield_time_ms":{"type":"integer"},"tty":{"type":"boolean"},"columns":{"type":"integer"},"rows":{"type":"integer"},"timeout_ms":{"type":"integer"}},"required":["cmd"],"additionalProperties":false}""", StartAsync),
+        new("exec_command", "运行 Windows PowerShell 5.1 命令；tty=true 使用 Windows ConPTY。每次启动前由本机用户审批。工作目录不是沙箱，命令可访问本机和网络。长任务返回 session_id；timeout_ms 默认 120000，范围 1000–3600000。PowerShell 5.1 的 Get-Content 默认可能按 ANSI 读取 UTF-8，读取中文文件时请显式使用 -Encoding UTF8。", """{"type":"object","properties":{"cmd":{"type":"string"},"yield_time_ms":{"type":"integer"},"tty":{"type":"boolean"},"columns":{"type":"integer"},"rows":{"type":"integer"},"timeout_ms":{"type":"integer"}},"required":["cmd"],"additionalProperties":false}""", StartAsync),
         new("write_stdin", "向当前对话启动的命令发送输入或读取后续输出；非空输入需要用户审批。可用 columns 和 rows 调整 PTY 尺寸。", """{"type":"object","properties":{"session_id":{"type":"string"},"chars":{"type":"string"},"yield_time_ms":{"type":"integer"},"columns":{"type":"integer"},"rows":{"type":"integer"}},"required":["session_id"],"additionalProperties":false}""", WriteAsync)
     ];
 
@@ -129,7 +129,9 @@ internal sealed class GatewayCommandSession(string workspace, Func<string, Cance
         if (args.TryGetProperty("timeout_ms", out var timeoutArg) && (timeoutArg.ValueKind != JsonValueKind.Number || !timeoutArg.TryGetInt32(out timeoutMilliseconds) || timeoutMilliseconds is < 1000 or > 3600000))
             return "错误：timeout_ms 必须为 1000 至 3600000。";
         if (commands.Values.Count(item => !item.Completion.IsCompleted) >= 4) return "错误：当前对话的命令数量已达上限。";
-        if (!await _approve("终端模式：" + (useTty ? "交互式 ConPTY" : "管道") + "；最长运行：" + timeoutMilliseconds + " 毫秒\n\n" + script, token).ConfigureAwait(false)) return "错误：用户拒绝执行命令。";
+        // Keep meaningful approval metadata in a PowerShell comment so the 5.1
+        // classifier parses the actual script without treating UI prose as commands.
+        if (!await _approve("# 终端模式：" + (useTty ? "交互式 ConPTY" : "管道") + "；最长运行：" + timeoutMilliseconds + " 毫秒\n" + script, token).ConfigureAwait(false)) return "错误：用户拒绝执行命令。";
         token.ThrowIfCancellationRequested();
         var executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
         if (!File.Exists(executable)) return "错误：未找到 Windows PowerShell 5.1。";

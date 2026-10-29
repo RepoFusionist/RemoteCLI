@@ -13,6 +13,11 @@ public static class ProtocolConstants
     public const int MaximumControllerModelResponseCharacters = 12 * 1024;
     public const int ControllerModelExecutionTimeoutSeconds = 120;
     public const int ControllerModelResponseTimeoutSeconds = 135;
+    public const int ControllerModelCatalogResponseTimeoutSeconds = 20;
+    public const int MaximumControllerModelCatalogModels = 64;
+    public const int MaximumControllerModelIdCharacters = 128;
+    public const int MaximumControllerModelDisplayNameCharacters = 256;
+    public const int MaximumControllerModelReasoningEfforts = 8;
 }
 
 [Flags]
@@ -192,7 +197,35 @@ public sealed record ControllerModelRequest(
     int ProtocolVersion,
     Guid SessionId,
     Guid RequestId,
-    string Prompt);
+    string Prompt,
+    string? Model = null,
+    string? ReasoningEffort = null);
+
+public sealed record ControllerModelInput(
+    string Prompt,
+    string? Model,
+    string? ReasoningEffort);
+
+public sealed record ControllerModelCatalogRequest(
+    int ProtocolVersion,
+    Guid SessionId,
+    Guid RequestId);
+
+public sealed record ControllerModelDescriptor(
+    string Id,
+    string DisplayName,
+    IReadOnlyList<string> ReasoningEfforts,
+    string DefaultReasoningEffort);
+
+public sealed record ControllerModelCatalogResult(
+    int ProtocolVersion,
+    Guid SessionId,
+    Guid RequestId,
+    bool Success,
+    IReadOnlyList<ControllerModelDescriptor> Models,
+    string? DefaultModel,
+    string? DefaultReasoningEffort,
+    string? ErrorCode);
 
 public sealed record ControllerModelResult(
     int ProtocolVersion,
@@ -229,6 +262,8 @@ public static class ProtocolJson
         "remote.tool.result",
         "controller.model.request",
         "controller.model.result",
+        "controller.model.catalog.request",
+        "controller.model.catalog.result",
         "session.close",
         "session.ping",
         "session.pong",

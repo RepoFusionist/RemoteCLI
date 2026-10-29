@@ -1,0 +1,99 @@
+Remote CLI - third-party notices
+================================
+
+This file covers third-party components used by the Remote CLI Windows desktop
+application and its optional UI plugin package. It does not state or imply a
+license for Remote CLI's own source code, which has no license grant in this
+repository. Full license texts are in the ThirdPartyNotices folder and are
+copied next to RemoteCli.Desktop.exe in every build and publish output.
+
+When redistributing the application, ship RemoteCli.Desktop.exe together with
+this file and the ThirdPartyNotices folder. Several MIT components have no
+copyright header inside their minified sources (xterm.js, the shiki bundle),
+so the accompanying texts are the only place their attribution survives.
+
+Components distributed with the desktop application
+---------------------------------------------------
+1. Microsoft.Web.WebView2 1.0.2903.40
+   Copyright (C) Microsoft Corporation. All rights reserved.
+   License: Microsoft 3-clause BSD-style (see ThirdPartyNotices/WebView2-LICENSE.txt).
+   Additional third-party notices from the NuGet package: ThirdPartyNotices/WebView2-NOTICE.txt.
+   The WebView2 Evergreen runtime itself is installed by Microsoft and is not
+   redistributed by Remote CLI; only the package's managed assemblies and the
+   embedded native loader are shipped.
+
+2. ModelContextProtocol and ModelContextProtocol.Core 2.3.0
+   Copyright (c) Model Context Protocol a Series of LF Projects, LLC.
+   License: Apache License 2.0 (declared as a NuGet license expression).
+   Full text: ThirdPartyNotices/ModelContextProtocol-Apache-2.0.txt
+   (verbatim from https://www.apache.org/licenses/LICENSE-2.0.txt).
+   The package ships no NOTICE file; no additional NOTICE content applies.
+
+3. Microsoft.Extensions.* (Microsoft.Extensions.Caching/Configuration/
+   DependencyInjection/Diagnostics/FileProviders/Hosting/Logging/Options/
+   Primitives 10.0.13, and Microsoft.Extensions.AI.Abstractions 10.11.0,
+   plus their transitive assemblies)
+   Copyright (c) .NET Foundation and Contributors.
+   License: MIT. Full text: ThirdPartyNotices/Microsoft.Extensions-MIT.txt.
+
+4. .NET 10 runtime and base class libraries
+   Copyright (c) .NET Foundation and Contributors.
+   License: MIT. Shipped inside the self-contained single-file publish.
+   Full text: ThirdPartyNotices/dotnet-runtime-MIT.txt.
+   The runtime binaries also include third-party components (ICU, zlib,
+   Brotli, and others); their notices are reproduced verbatim in
+   ThirdPartyNotices/dotnet-runtime-THIRD-PARTY-NOTICES.txt
+   (copied from the installed .NET 10 SDK).
+
+5. xterm.js 6.0.0, xterm.css, and @xterm/addon-serialize 0.14.0
+   Copyright (c) 2017-2019, The xterm.js authors; 2014-2016, SourceLair
+   Private Company; 2012-2013, Christopher Jeffrey.
+   License: MIT. Embedded in the desktop executable as UI resources.
+   The shipped files are byte-identical to the upstream 6.0.0 / 0.14.0
+   distributions, which carry no in-file copyright header.
+   Full text: ThirdPartyNotices/xterm.js-MIT.txt.
+
+Components distributed only as a separate optional download
+-----------------------------------------------------------
+6. shiki 4.5.0 (MIT), bundled into artifacts/plugins/code-highlight.lspkg
+   Copyright (c) 2021 Pine Wu; 2023 Anthony Fu.
+   License: MIT. Full text: ThirdPartyNotices/shiki-MIT.txt and the
+   LICENSE.txt file inside the plugin package. The plugin is installed by the
+   user and is not part of the desktop executable or its ZIP package.
+   The minified bundle also contains these MIT-licensed packages whose
+   notices are stripped by the minifier:
+     @shikijs/core, @shikijs/engine-javascript, @shikijs/langs,
+     @shikijs/themes, @shikijs/primitive 4.5.0
+       Copyright (c) 2021 Pine Wu; 2023 Anthony Fu.
+     oniguruma-to-es 4.3.6, oniguruma-parser 0.12.2
+       Copyright (c) 2024-2026 Steven Levithan.
+     regex 6.1.0, regex-recursion 6.0.2, regex-utilities 2.3.0
+       Copyright (c) 2024-2025 Steven Levithan.
+   Their consolidated attribution is in ThirdPartyNotices/shiki-bundle-NOTICE.txt.
+
+7. @deepseek-ai/libreoffice-kit-win32-x64 0.1.2 (optional Office preview kit)
+   Top-level license declared upstream: MPL-2.0
+   (ThirdPartyNotices/OfficeKit-MPL-2.0.txt). The kit is a modified build of
+   LibreOffice 26.8.0.3 (upstream revision bce0998afefdbc355585ca324285661a2170ba77,
+   configured with --with-vendor=DeepSeek and a trimmed payload). Its bundled
+   program/license.txt additionally lists LibreOffice third-party components
+   under tri-license terms that offer an MPL option (Graphite2, Hunspell,
+   Hyphen) and permissive terms (ICU, libjpeg-turbo, HarfBuzz, libpng,
+   libtiff, libwebp, libnumbertext, and others), plus the LibreOffice NOTICE
+   (ThirdPartyNotices/OfficeKit-LibreOffice-NOTICE.txt).
+   STATUS: This kit is an OPTIONAL THIRD-PARTY RUNTIME DOWNLOAD from its
+   upstream npm package. It is NOT bundled in the Remote CLI desktop release,
+   its publish folder, or its ZIP package. The desktop app fetches it from
+   https://registry.npmjs.org/@deepseek-ai/libreoffice-kit-win32-x64/-/libreoffice-kit-win32-x64-0.1.2.tgz
+   on first use, verifies the published SHA-512, and extracts it under
+   %LOCALAPPDATA%\RemoteCLI\OfficeKit.
+   DO NOT REDISTRIBUTE THE KIT FROM THIS REPOSITORY. Publishing the upstream
+   archive (or an archive containing it) makes the publisher responsible for
+   the MPL-2.0 source-availability obligation for the exact modified build and
+   for the LGPL relinking/source terms that apply if a recipient elects an
+   LGPL branch. Remote CLI does not grant those rights, does not relicense the
+   kit, and cannot attest the corresponding LibreOffice core source. Keep the
+   download path (upstream -> user) as the only distribution channel.
+
+No other third-party code is intentionally bundled. If a build adds a
+component, add its license text here and to the ThirdPartyNotices folder.
